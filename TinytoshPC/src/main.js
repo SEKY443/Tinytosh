@@ -340,6 +340,50 @@ function setUiStatus(text, color, lockDurationMs = 0) {
     }
 }
 
+const CLAUDE_STATE_LABELS = {
+    offline: "No Session", idle: "Idle", thinking: "Thinking", tool: "Running Tool",
+    writing: "Writing Code", permission: "❗ Needs You", limit: "Out of Quota"
+};
+
+const CLAUDE_USAGE_NOTES = {
+    no_login: "Usage unavailable: sign in to Claude Code on this PC.",
+    expired: "Usage paused: open Claude Code to refresh your login.",
+    rejected: "Usage unavailable: Claude login was rejected.",
+    network: "Usage unavailable: cannot reach api.anthropic.com.",
+    unsupported: "Usage unavailable for this account type."
+};
+
+function formatClaudeReset(minutes) {
+    if (!minutes || minutes <= 0) return "now";
+    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 1440) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    return `${Math.floor(minutes / 1440)}d ${Math.floor(minutes / 60) % 24}h`;
+}
+
+function updateClaudeCard(data) {
+    const status = document.getElementById("claude-status");
+    const project = document.getElementById("claude-project");
+    const usage = document.getElementById("claude-usage");
+    const note = document.getElementById("claude-note");
+    if (!status || !project || !usage || !note) return;
+
+    let label = (CLAUDE_STATE_LABELS[data.claude_state] || data.claude_state).toUpperCase();
+    if (data.claude_tool && (data.claude_state === "tool" || data.claude_state === "writing" || data.claude_state === "permission")) {
+        label += ` · ${data.claude_tool}`;
+    }
+    status.innerText = label;
+    status.style.color = (data.claude_state === "offline" || data.claude_state === "idle") ? COLOR_MUTED : COLOR_SUCCESS;
+
+    project.innerText = data.claude_proj || "--";
+    usage.innerText = data.claude_ok
+        ? `5H: ${data.claude_5h}% (${formatClaudeReset(data.claude_5h_reset)}) | 7D: ${data.claude_7d}% (${formatClaudeReset(data.claude_7d_reset)})`
+        : "5H: -- | 7D: --";
+
+    const noteText = CLAUDE_USAGE_NOTES[data.claude_err] || "";
+    note.innerText = noteText;
+    note.classList.toggle("hidden", noteText === "");
+}
+
 async function updateStats() {
     try {
         const jsonStr = await invoke("get_stats");
@@ -407,6 +451,9 @@ async function updateStats() {
                     mAlbum.classList.add("hidden");
                 }
             }
+        }
+        if (data.claude_state !== undefined) {
+            updateClaudeCard(data);
         }
         if (!document.getElementById("logs-panel")?.classList.contains("hidden") && !isLoggingPaused) {
             try {
@@ -616,6 +663,33 @@ async function initAutostart() {
     } catch (e) { }
 }
 
+async function initClaudeHook() {
+    const cb = document.getElementById("claude-hook-cb");
+    const errorText = document.getElementById("claude-hook-error");
+    if (!cb || !errorText) return;
+
+    const showError = (message) => {
+        errorText.innerText = message || "";
+        errorText.classList.toggle("hidden", !message);
+    };
+
+    try { cb.checked = await invoke("get_claude_hook"); } catch (e) { }
+
+    cb.addEventListener("change", async (e) => {
+        const wanted = e.target.checked;
+        cb.disabled = true;
+        try {
+            await invoke("set_claude_hook", { enable: wanted });
+            showError("");
+        } catch (err) {
+            e.target.checked = !wanted;
+            showError(String(err));
+        } finally {
+            cb.disabled = false;
+        }
+    });
+}
+
 function updateVisibility() {
   var pairs = [
       ['autoDetect','manualFields',true], ['nightMode','nightFields',false],
@@ -626,6 +700,7 @@ function updateVisibility() {
       ['showStock','stockContent',false], ['showCrypto','cryptoContent',false],
       ['showCurrency','currencyContent',false], ['showPc','pcContent',false],
       ['showMedia', 'mediaContent', false], ['showBambu', 'bambuContent', false],
+      ['showClaude', 'claudeContent', false],
       ['customWeatherSyncChk','customWeatherSyncFields',false], ['customAqiSyncChk','customAqiSyncFields',false],
       ['customStockSyncChk','customStockSyncFields',false], ['customCryptoSyncChk','customCryptoSyncFields',false],
       ['customCurrencySyncChk','customCurrencySyncFields',false]
@@ -871,6 +946,9 @@ async function fetchDeviceData() {
             setCb('hide_empty_pc', d.hide_empty_pc, true);
             setCb('hide_empty_media', d.hide_empty_media, true);
             setCb('hide_empty_bambu', d.hide_empty_bambu, true);
+            setCb('showClaude', d.show_claude);
+            setCb('claude_alert', d.claude_alert, true);
+            setCb('hide_empty_claude', d.hide_empty_claude, true);
 
             if (d.anim_mask !== undefined) {
                 const mask = d.anim_mask;
@@ -1070,6 +1148,19 @@ async function fetchDeviceData() {
             let gr = document.getElementById('media-grid'); if(gr) gr.classList.add('hidden');
         }
 
+        if (d.claude_state !== undefined) {
+            let nd = document.getElementById('claude-no-data'); if(nd) nd.style.display = 'none';
+            let gr = document.getElementById('claude-grid'); if(gr) gr.classList.remove('hidden');
+
+            set('settings-claude-state', CLAUDE_STATE_LABELS[d.claude_state] || d.claude_state);
+            set('settings-claude-proj', d.claude_proj || '--');
+            set('settings-claude-5h', d.claude_ok ? `${d.claude_5h}% (resets ${formatClaudeReset(d.claude_5h_reset)})` : 'N/A');
+            set('settings-claude-7d', d.claude_ok ? `${d.claude_7d}% (resets ${formatClaudeReset(d.claude_7d_reset)})` : 'N/A');
+        } else {
+            let nd = document.getElementById('claude-no-data'); if(nd) nd.style.display = 'block';
+            let gr = document.getElementById('claude-grid'); if(gr) gr.classList.add('hidden');
+        }
+
         if (d.bambu_status !== undefined) {
             let nd = document.getElementById('bambu-no-data'); if(nd) nd.style.display = 'none';
             let gr = document.getElementById('bambu-grid'); if(gr) gr.classList.remove('hidden');
@@ -1182,6 +1273,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const btn = document.getElementById("conn-btn");
     if(btn) btn.addEventListener("click", toggleConnection);
     initAutostart();
+    initClaudeHook();
     loadPorts();
     
     setInterval(loadPorts, PORT_SCAN_INTERVAL_MS); 
@@ -1189,7 +1281,7 @@ window.addEventListener("DOMContentLoaded", () => {
     setInterval(fetchDeviceData, HARDWARE_SYNC_INTERVAL_MS); 
     setTimeout(fetchDeviceData, INITIAL_SYNC_DELAY_MS); 
 
-    ['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'autoCycle', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => {
+    ['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'showClaude', 'autoCycle', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => {
         var el = document.getElementById(id); 
         if(el) el.addEventListener('change', () => { updateVisibility(); syncScreenOrder(true); }); 
     });

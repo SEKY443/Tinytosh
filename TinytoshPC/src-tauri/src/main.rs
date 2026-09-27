@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod claude;
+
 use std::thread;
 use std::time::Duration;
 use std::sync::Mutex; 
@@ -45,6 +47,27 @@ const FETCH_CONFIG_RETRY_DELAY_MS: u64 = 100;
 const WINDOW_MIN_WIDTH: f64 = 450.0;        
 const WINDOW_MIN_HEIGHT: f64 = 450.0;       
 
+const CLAUDE_ACTIVITY_INTERVAL_MS: u64 = 1000; // Transcript scan cadence; only changed files are re-read
+
+// Menu bar icon: the Happy Mac face. 8 rows at 4x = 32 px plus 2 px of padding
+// above and below = 36 px, exactly the 18 pt menu bar height on Retina, so the
+// pixels map 1:1 and stay crisp.
+#[cfg(target_os = "macos")]
+const TRAY_ICON_ART: [&str; 8] = [
+    "#...#...#",
+    "#...#...#",
+    "....#....",
+    "....#....",
+    "...##....",
+    ".........",
+    ".#....#..",
+    "..####...",
+];
+#[cfg(target_os = "macos")]
+const TRAY_ICON_SCALE: usize = 4;
+#[cfg(target_os = "macos")]
+const TRAY_ICON_PAD_Y: usize = 2;
+
 // Structs
 
 struct AppState {
@@ -62,6 +85,8 @@ struct AppState {
     media_info: Mutex<MediaStats>,
     device_logs: Mutex<Vec<String>>,
     log_reading_enabled: Mutex<bool>,
+    claude_activity: Mutex<claude::ActivitySnapshot>,
+    claude_usage: Mutex<claude::UsageState>,
 }
 
 #[derive(serde::Serialize, Clone, Default)]
@@ -81,6 +106,8 @@ struct BridgeStats {
     disk_percent: u64,
     #[serde(flatten)]
     media: MediaStats,
+    #[serde(flatten)]
+    claude: claude::ClaudeStats,
 }
 
 #[derive(serde::Serialize)]
@@ -107,6 +134,16 @@ fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
 #[tauri::command]
 fn check_autostart(app: tauri::AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn get_claude_hook() -> bool {
+    claude::hook_enabled()
+}
+
+#[tauri::command]
+fn set_claude_hook(enable: bool) -> Result<bool, String> {
+    claude::set_hook_enabled(enable)
 }
 
 #[tauri::command]
@@ -227,6 +264,30 @@ async fn save_device_settings(state: tauri::State<'_, AppState>, json_payload: S
     }
 }
 
+// Renders TRAY_ICON_ART as black-on-transparent RGBA. Used as a template image,
+// so macOS recolors it to match light and dark menu bars.
+#[cfg(target_os = "macos")]
+fn tray_icon_image() -> tauri::image::Image<'static> {
+    let width = TRAY_ICON_ART[0].len() * TRAY_ICON_SCALE;
+    let height = TRAY_ICON_ART.len() * TRAY_ICON_SCALE + 2 * TRAY_ICON_PAD_Y;
+    let mut rgba = vec![0u8; width * height * 4];
+
+    for (row, line) in TRAY_ICON_ART.iter().enumerate() {
+        for (col, pixel) in line.bytes().enumerate() {
+            if pixel != b'#' {
+                continue;
+            }
+            for dy in 0..TRAY_ICON_SCALE {
+                for dx in 0..TRAY_ICON_SCALE {
+                    let i = ((TRAY_ICON_PAD_Y + row * TRAY_ICON_SCALE + dy) * width + col * TRAY_ICON_SCALE + dx) * 4;
+                    rgba[i + 3] = 255;
+                }
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, width as u32, height as u32)
+}
+
 fn show_window_safely(app_handle: &tauri::AppHandle, window: tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -253,6 +314,8 @@ fn main() {
         media_info: Mutex::new(MediaStats::default()),
         device_logs: Mutex::new(Vec::new()),
         log_reading_enabled: Mutex::new(false),
+        claude_activity: Mutex::new(claude::ActivitySnapshot::default()),
+        claude_usage: Mutex::new(claude::UsageState::default()),
     };
 
     let my_pc_id = match get_mac_address() {
@@ -270,7 +333,8 @@ fn main() {
         .manage(app_state) 
         .invoke_handler(tauri::generate_handler![
             get_stats, get_ports, toggle_connection, set_autostart, check_autostart,
-            fetch_device_data, save_device_settings, get_logs, toggle_logging
+            fetch_device_data, save_device_settings, get_logs, toggle_logging,
+            get_claude_hook, set_claude_hook
         ])
         .setup(move |app| {
             let args: Vec<String> = env::args().collect();
@@ -286,9 +350,12 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
-            let icon = app.default_window_icon().unwrap().clone();
-            
-            let _tray = TrayIconBuilder::new().icon(icon).menu(&menu)
+            #[cfg(target_os = "macos")]
+            let tray_builder = TrayIconBuilder::new().icon(tray_icon_image()).icon_as_template(true);
+            #[cfg(not(target_os = "macos"))]
+            let tray_builder = TrayIconBuilder::new().icon(app.default_window_icon().unwrap().clone());
+
+            let _tray = tray_builder.menu(&menu)
                 .on_menu_event(|app: &tauri::AppHandle, event| {
                     match event.id().as_ref() {
                         "quit" => app.exit(0),
@@ -468,6 +535,30 @@ fn main() {
                 }
             });
 
+            let app_handle_claude = app.handle().clone();
+            thread::spawn(move || {
+                let state = app_handle_claude.state::<AppState>();
+                let mut monitor = claude::ActivityMonitor::new();
+                loop {
+                    let snapshot = monitor.poll();
+                    *state.claude_activity.lock().unwrap() = snapshot;
+                    thread::sleep(Duration::from_millis(CLAUDE_ACTIVITY_INTERVAL_MS));
+                }
+            });
+
+            let app_handle_usage = app.handle().clone();
+            thread::spawn(move || {
+                let state = app_handle_usage.state::<AppState>();
+                let mut poller = claude::UsagePoller::new();
+                loop {
+                    // Poll into a copy so the HTTP request never holds the lock.
+                    let mut usage = state.claude_usage.lock().unwrap().clone();
+                    poller.poll(&mut usage);
+                    *state.claude_usage.lock().unwrap() = usage;
+                    thread::sleep(Duration::from_secs(claude::USAGE_POLL_SECS));
+                }
+            });
+
             let app_handle_mdns = app.handle().clone();
             thread::spawn(move || {
                 let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
@@ -542,6 +633,10 @@ fn main() {
                     let download_kb = total_rx_bytes / 1024; 
 
                     let media_data = state.media_info.lock().unwrap().clone();
+                    let claude_data = claude::build_stats(
+                        &state.claude_activity.lock().unwrap(),
+                        &state.claude_usage.lock().unwrap(),
+                    );
 
                     let data = BridgeStats { 
                         pc_id: thread_pc_id.clone(),
@@ -549,7 +644,8 @@ fn main() {
                         net_down_kb: download_kb, 
                         mem_percent: ram, 
                         disk_percent: disk_usage,
-                        media: media_data
+                        media: media_data,
+                        claude: claude_data,
                     };
                     
                     let payload = serde_json::to_string(&data).unwrap_or("{}".to_string());

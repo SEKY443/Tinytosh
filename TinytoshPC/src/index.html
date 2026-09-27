@@ -61,6 +61,22 @@
       </div>
 
       <div class="panel">
+        <h3 class="panel-title">Claude Code</h3>
+        <div class="identity-box" style="margin-top: 10px;">
+          <div id="claude-status" class="status-badge" style="margin-bottom: 5px; color: var(--text-muted);">NO SESSION</div>
+          <div id="claude-project" class="id-text" style="font-size: 1.3rem;">--</div>
+          <div id="claude-usage" class="ip-text">5H: -- | 7D: --</div>
+          <div id="claude-note" class="tile-label hidden"></div>
+        </div>
+        <div class="checkbox-wrapper">
+          <input type="checkbox" id="claude-hook-cb">
+          <label for="claude-hook-cb" class="mt-0">Exact "Needs You" alerts</label>
+        </div>
+        <p class="help-text mt-0">Adds a small Notification hook to Claude Code's settings so permission prompts are reported instantly instead of guessed. Other settings are kept, and a backup is saved.</p>
+        <p id="claude-hook-error" class="help-text mt-0 hidden"></p>
+      </div>
+
+      <div class="panel">
         <h3 class="panel-title">Local PC Telemetry</h3>
         <div class="dashboard-grid">
           <div class="telemetry-tile">
@@ -207,6 +223,7 @@
               <li class="sortable-item" data-id="10" data-target="showPc"><div class="order-ctrl"><span class="move-btn move-up">▲</span><span class="move-btn move-down">▼</span></div>PC Monitor</li>
               <li class="sortable-item" data-id="11" data-target="showMedia"><div class="order-ctrl"><span class="move-btn move-up">▲</span><span class="move-btn move-down">▼</span></div>PC Media</li>
               <li class="sortable-item" data-id="12" data-target="showBambu"><div class="order-ctrl"><span class="move-btn move-up">▲</span><span class="move-btn move-down">▼</span></div>Printer Info</li>
+              <li class="sortable-item" data-id="13" data-target="showClaude"><div class="order-ctrl"><span class="move-btn move-up">▲</span><span class="move-btn move-down">▼</span></div>Claude Code</li>
             </ul>
             <input type="hidden" name="screen_order" id="screenOrderInput">
           </div>
@@ -471,6 +488,25 @@
                 <input type="text" name="bambu_sn" placeholder="e.g. 00M...">
                 <label>Printer Access Code:</label>
                 <input type="text" name="bambu_code" placeholder="e.g. 1234abcd">
+              </div>
+            </div>
+
+            <div class="panel" id="panel-13">
+              <label class="checkbox-label mt-0"><input type="checkbox" id="showClaude" name="show_claude"> Claude Code Screen</label>
+              <div id="claudeContent" class="collapsible">
+                <div id="claude-no-data" class="no-data-tile">🤖 Claude Code data will be available after sync</div>
+                <div id="claude-grid" class="hidden">
+                  <div class="dashboard-grid">
+                    <div class="tile"><div class="tile-icon">🤖</div><div class="tile-value" id="settings-claude-state" style="font-size:1.2rem">--</div><div class="tile-label">Status</div></div>
+                    <div class="tile"><div class="tile-icon">📁</div><div class="tile-value" id="settings-claude-proj" style="font-size:1.2rem">--</div><div class="tile-label">Project</div></div>
+                    <div class="tile"><div class="tile-icon">⏱️</div><div class="tile-value" id="settings-claude-5h" style="font-size:1.2rem">--</div><div class="tile-label">5-Hour Usage</div></div>
+                    <div class="tile"><div class="tile-icon">📅</div><div class="tile-value" id="settings-claude-7d" style="font-size:1.2rem">--</div><div class="tile-label">Weekly Usage</div></div>
+                  </div>
+                </div>
+                <label class="checkbox-label"><input type="checkbox" name="claude_alert"> Jump to this screen when Claude needs you</label>
+                <p class="help-text mt-0">Shows a big "!" and pauses rotation while Claude waits for a permission or an answer.</p>
+                <label class="checkbox-label"><input type="checkbox" name="hide_empty_claude"> Hide empty screen</label>
+                <p class="help-text mt-0">Screen is excluded from rotation when there is no data.</p>
               </div>
             </div>
           </div> 
