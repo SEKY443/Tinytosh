@@ -32,6 +32,7 @@ const HTTP_REQUEST_TIMEOUT_MS: u64 = 500;
 // Global Delays & Timeouts
 const FETCH_CONFIG_TIMEOUT_SEC: u64 = 2;    
 const SAVE_CONFIG_TIMEOUT_SEC: u64 = 15;    
+const BRIGHTNESS_TIMEOUT_MS: u64 = 1500;
 
 const SERIAL_BAUD_RATE: u32 = 115_200;      
 const SERIAL_TIMEOUT_MS: u64 = 100;         
@@ -288,6 +289,31 @@ fn tray_icon_image() -> tauri::image::Image<'static> {
     tauri::image::Image::new_owned(rgba, width as u32, height as u32)
 }
 
+// Live brightness preview; `persist` is sent once the slider is released.
+#[tauri::command]
+async fn set_device_brightness(state: tauri::State<'_, AppState>, value: u8, persist: bool) -> Result<(), String> {
+    if !(1..=100).contains(&value) {
+        return Err("Brightness must be 1-100".into());
+    }
+    let active = state.active_port_name.lock().unwrap().clone();
+    let save = if persist { "1" } else { "0" };
+
+    if active.starts_with("WiFi:") {
+        let ip = state.target_wifi_ip.lock().unwrap().clone();
+        if ip.is_empty() { return Err("No IP".into()); }
+        let agent = ureq::builder().timeout(Duration::from_millis(BRIGHTNESS_TIMEOUT_MS)).build();
+        agent.post(&format!("http://{}/brightness", ip))
+            .send_form(&[("value", &value.to_string()), ("save", save)])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    } else if active.starts_with("Serial:") {
+        state.command_queue.lock().unwrap().push(format!("SET_BRIGHTNESS:{}:{}\n", value, save));
+        Ok(())
+    } else {
+        Err("Not connected".into())
+    }
+}
+
 fn show_window_safely(app_handle: &tauri::AppHandle, window: tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -334,7 +360,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_stats, get_ports, toggle_connection, set_autostart, check_autostart,
             fetch_device_data, save_device_settings, get_logs, toggle_logging,
-            get_claude_hook, set_claude_hook
+            get_claude_hook, set_claude_hook, set_device_brightness
         ])
         .setup(move |app| {
             let args: Vec<String> = env::args().collect();

@@ -663,6 +663,45 @@ async function initAutostart() {
     } catch (e) { }
 }
 
+// Brightness at or below this uses the firmware's low-drive (CRT-like) band.
+const CRT_MODE_MAX_PERCENT = 30;
+
+function showBrightness() {
+    const slider = document.getElementById("brightnessInput");
+    const label = document.getElementById("brightnessValue");
+    const mode = document.getElementById("brightnessMode");
+    if (!slider) return;
+    if (label) label.innerText = slider.value + "%";
+    if (mode) mode.innerText = Number(slider.value) <= CRT_MODE_MAX_PERCENT ? "📺 CRT" : "";
+}
+
+// Live brightness preview while dragging (throttled), persisted on release.
+function initBrightnessSlider() {
+    const slider = document.getElementById("brightnessInput");
+    if (!slider) return;
+
+    const THROTTLE_MS = 150;
+    let lastSent = 0;
+    let timer = null;
+    const send = (persist) => invoke("set_device_brightness", { value: Number(slider.value), persist }).catch(() => {});
+
+    slider.addEventListener("input", () => {
+        showBrightness();
+        clearTimeout(timer);
+        const now = Date.now();
+        if (now - lastSent > THROTTLE_MS) {
+            lastSent = now;
+            send(false);
+        } else {
+            timer = setTimeout(() => { lastSent = Date.now(); send(false); }, THROTTLE_MS);
+        }
+    });
+    slider.addEventListener("change", () => {
+        clearTimeout(timer);
+        send(true);
+    });
+}
+
 async function initClaudeHook() {
     const cb = document.getElementById("claude-hook-cb");
     const errorText = document.getElementById("claude-hook-error");
@@ -700,7 +739,7 @@ function updateVisibility() {
       ['showStock','stockContent',false], ['showCrypto','cryptoContent',false],
       ['showCurrency','currencyContent',false], ['showPc','pcContent',false],
       ['showMedia', 'mediaContent', false], ['showBambu', 'bambuContent', false],
-      ['showClaude', 'claudeContent', false],
+      ['showClaude', 'claudeContent', false], ['brightSchedChk', 'brightSchedFields', false],
       ['customWeatherSyncChk','customWeatherSyncFields',false], ['customAqiSyncChk','customAqiSyncFields',false],
       ['customStockSyncChk','customStockSyncFields',false], ['customCryptoSyncChk','customCryptoSyncFields',false],
       ['customCurrencySyncChk','customCurrencySyncFields',false]
@@ -862,6 +901,10 @@ async function fetchDeviceData() {
             setVal('refresh_min', d.refresh_min);
             setCb('autoCycle', d.auto_cycle);
             setVal('screen_int', d.screen_int);
+            if (d.brightness !== undefined) {
+                setVal('brightness', d.brightness);
+                showBrightness();
+            }
             setRadio('time_format', d.time_format);
             
             setCb('autoDetect', d.auto_detect);
@@ -916,6 +959,13 @@ async function fetchDeviceData() {
             setCb('customStockSyncChk', d.custom_stock_int_min > 0 ? 1 : 0);
             setVal('custom_stock_int_min', d.custom_stock_int_min > 0 ? d.custom_stock_int_min : d.refresh_min);
             const stCont = document.getElementById("stock-list-container");
+            setCb('brightSchedChk', d.bright_sched);
+            const brCont = document.getElementById('bright-list-container');
+            if (brCont && d.bright_times) {
+                brCont.innerHTML = "";
+                d.bright_times.forEach((t, i) => window.addBrightRow(t, d.bright_levels[i]));
+                if (brCont.children.length === 0) window.addBrightRow();
+            }
             if (stCont) { stCont.innerHTML = ""; (d.stock_symbols && d.stock_symbols.length > 0 ? d.stock_symbols : ["AAPL"]).forEach(s => window.addStockRow(s)); }
 
             setCb('showCrypto', d.show_crypto);
@@ -1203,6 +1253,19 @@ window.removeRow = function(btn, containerId) {
     updateRowControls(containerId, 5);
 };
 
+window.addBrightRow = function(time = "12:00", level = 50) {
+    const container = document.getElementById('bright-list-container');
+    if (!container || container.children.length >= 5) return;
+    const div = document.createElement('div');
+    div.className = 'multi-row';
+    div.innerHTML = `<div class="input-wrapper"><label class="mt-0">From:</label><input type="time" name="bright_times[]" required></div><div class="input-wrapper"><label class="mt-0">Brightness %:</label><input type="number" name="bright_levels[]" min="1" max="100" required></div><button type="button" class="btn-remove" onclick="removeRow(this, 'bright-list-container')">-</button>`;
+    container.appendChild(div);
+    div.querySelector('input[type="time"]').value = time;
+    div.querySelector('input[type="number"]').value = level;
+    formDirty = true;
+    updateRowControls('bright-list-container', 5);
+};
+
 window.addStockRow = function(val = null) {
     const container = document.getElementById("stock-list-container");
     if (!container || container.children.length >= 5) return;
@@ -1274,6 +1337,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if(btn) btn.addEventListener("click", toggleConnection);
     initAutostart();
     initClaudeHook();
+    initBrightnessSlider();
     loadPorts();
     
     setInterval(loadPorts, PORT_SCAN_INTERVAL_MS); 
@@ -1281,7 +1345,7 @@ window.addEventListener("DOMContentLoaded", () => {
     setInterval(fetchDeviceData, HARDWARE_SYNC_INTERVAL_MS); 
     setTimeout(fetchDeviceData, INITIAL_SYNC_DELAY_MS); 
 
-    ['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'showClaude', 'autoCycle', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => {
+    ['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'showClaude', 'autoCycle', 'brightSchedChk', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => {
         var el = document.getElementById(id); 
         if(el) el.addEventListener('change', () => { updateVisibility(); syncScreenOrder(true); }); 
     });
@@ -1363,6 +1427,8 @@ window.addEventListener("DOMContentLoaded", () => {
             form.querySelectorAll('input[type="checkbox"]').forEach(cb => { jsonObj[cb.name] = cb.checked ? 1 : 0; });
             jsonObj['anim_mask'] = parseInt(document.getElementById('finalMask').value);
             jsonObj['screen_order'] = document.getElementById('screenOrderInput').value;
+            jsonObj['bright_times'] = Array.from(form.querySelectorAll('input[name="bright_times[]"]')).map(i => i.value);
+            jsonObj['bright_levels'] = Array.from(form.querySelectorAll('input[name="bright_levels[]"]')).map(i => Math.min(100, Math.max(1, Number(i.value) || 1)));
 
             jsonObj['stock_symbols'] = Array.from(form.querySelectorAll('select[name="stock_symbols[]"]')).map(s => s.value);
             jsonObj['crypto_ids'] = Array.from(form.querySelectorAll('select[name="crypto_ids[]"]')).map(s => Number(s.value));

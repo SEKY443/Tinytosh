@@ -122,6 +122,7 @@ input[type='color']::-webkit-color-swatch { border: none; }
 
 /* Checkboxes & Radios */
 input[type="checkbox"], input[type="radio"] { accent-color: var(--primary-main); cursor: pointer; width: 18px; height: 18px; }
+input[type="range"] { display: block; width: 100%; margin: 12px 0; accent-color: var(--primary-main); cursor: pointer; }
 .checkbox-wrapper { display: flex; align-items: center; margin-bottom: 20px; padding: 15px; background: var(--surface-hover); border: 1px solid var(--border-subtle); }
 .checkbox-wrapper label { margin-left: 12px; font-weight: 600; color: var(--text-main); font-size: 0.95rem; cursor: pointer; }
 .checkbox-label { display: flex; align-items: center; gap: 10px; margin-top: 12px; cursor: pointer; font-weight: 600; }
@@ -166,7 +167,7 @@ legend { font-family: var(--font-tech); color: var(--primary-main); font-weight:
 /* Dynamic Multi-Rows */
 .multi-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 12px; }
 .multi-row .input-wrapper { flex: 1; min-width: 0; }
-.multi-row .input-wrapper select { margin: 0; }
+.multi-row .input-wrapper select, .multi-row .input-wrapper input { margin: 0; }
 .btn-remove { width: 45px !important; height: 45px !important; margin: 0 !important; padding: 0 !important; flex-shrink: 0; font-size: 1.5rem !important; display: flex; align-items: center; justify-content: center; background-color: var(--surface-active); color: var(--text-muted); border: 1px solid var(--border-subtle); box-shadow: none; font-family: var(--font-sans); font-weight: 400; }
 .btn-remove:hover { background-color: var(--primary-main); color: var(--text-on-primary); border-color: var(--primary-main); }
 
