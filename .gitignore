@@ -6,3 +6,6 @@ src-tauri/target/
 TinytoshESP32/build/
 *.bin
 !Tinytosh.bin
+
+# Local release notes (not committed)
+CHANGELOG.md
