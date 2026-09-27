@@ -43,6 +43,7 @@ public:
     bool isOnFirstEnabledScreen(const AppState& state);
 
     void setContrast(bool dim);
+    void setBrightness(int percent);
 
 private:
     uint8_t screenBufferOld[1024];
@@ -51,8 +52,21 @@ private:
     int currentScreen = 0;
     int currentSubScreen = 0;
 
-    static const int CONTRAST_DIM = 1;
+    static const int CONTRAST_MIN = 1;
     static const int CONTRAST_MAX = 255;
+
+    // Contrast alone bottoms out quite bright on SSD1306. The low band also
+    // shortens the pixel pre-charge and lowers VCOMH for a much darker floor.
+    static const int LOW_DRIVE_MAX_PERCENT = 30;   // Web Panel and PC App show "CRT" up to this value
+    static const uint8_t PRECHARGE_NORMAL = 0xF1;  // Adafruit default for SWITCHCAPVCC
+    static const uint8_t PRECHARGE_LOW = 0x11;
+    static const uint8_t VCOMH_NORMAL = 0x40;      // Adafruit default
+    static const uint8_t VCOMH_LOW = 0x00;
+
+    int brightnessPercent = 100;
+    int appliedLevel = -1;
+
+    void applyDriveLevel(int percent);
 
     int getFirstEnabledScreen(const AppState& state);
 

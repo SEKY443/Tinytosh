@@ -6,6 +6,7 @@
 #include "structs.h"
 
 typedef void (*ConfigSaveCallback)();
+typedef void (*BrightnessCallback)(int percent, bool persist);
 
 class WebServerService {
 public:
@@ -13,11 +14,13 @@ public:
     void begin();
     void handleClient();
     void setAppState(AppState* appState);
+    void setBrightnessCallback(BrightnessCallback callback);
     
     void handleRoot();
     void handleSave();
     void handleUpdate();
     void handlePcStats();
+    void handleBrightness();
     
 private:
     static const unsigned long PC_DATA_TIMEOUT_MS = 10000;
@@ -31,6 +34,7 @@ private:
     WebServer server;
     WiFiManager wm;
     ConfigSaveCallback saveCallback;
+    BrightnessCallback brightnessCallback = nullptr;
     
     AppState* state;
 };

@@ -16,11 +16,16 @@ void WebServerService::setAppState(AppState* appState) {
   state = appState;
 }
 
+void WebServerService::setBrightnessCallback(BrightnessCallback callback) {
+  brightnessCallback = callback;
+}
+
 void WebServerService::begin() {
   server.on("/", HTTP_GET, [this](){ this->handleRoot(); }); 
   server.on("/save", HTTP_POST, [this](){ this->handleSave(); });
   server.on("/update", HTTP_GET, [this](){ this->handleUpdate(); }); 
   server.on("/pc-stats", HTTP_POST, [this](){ this->handlePcStats(); });
+  server.on("/brightness", HTTP_POST, [this](){ this->handleBrightness(); });
   
   server.begin();
   Serial.println("WebServerService: HTTP Server started."); 
@@ -112,6 +117,8 @@ void WebServerService::handleRoot() {
   add("input[type='color'] { padding: 0; cursor: pointer; height: 45px; border: 2px solid var(--border-subtle); } input[type='color']::-webkit-color-swatch-wrapper { padding: 0; } input[type='color']::-webkit-color-swatch { border: none; }");
   
   add("input[type='checkbox'], input[type='radio'] { accent-color: var(--primary-main); cursor: pointer; width: 18px; height: 18px; }");
+  add("input[type='range'] { display: block; width: 100%; margin: 12px 0; accent-color: var(--primary-main); cursor: pointer; }");
+  add(".multi-row .input-wrapper input { margin: 0; }");
   add(".checkbox-wrapper { display: flex; align-items: center; margin-bottom: 20px; padding: 15px; background: var(--surface-hover); border: 1px solid var(--border-subtle); } .checkbox-wrapper label { margin-left: 12px; font-weight: 600; color: var(--text-main); font-size: 0.95rem; cursor: pointer; }");
   add(".checkbox-label { display: flex; align-items: center; gap: 10px; margin-top: 12px; cursor: pointer; font-weight: 600; } .radio-group { display: flex; gap: 20px; margin-top: 10px; } .radio-label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin-top: 0; font-weight: 500; }");
   
@@ -182,6 +189,15 @@ void WebServerService::handleRoot() {
   add("</div><hr>");
 
   add("<label>Data Sync Interval (Mins):</label><input type='number' name='refresh_min' value='" + String(config.refresh_interval_min) + "'>");
+  add("<label>Display Brightness: <span id='brightnessValue'>" + String(config.brightness) + "%</span> <span id='brightnessMode'>" + String(config.brightness <= 30 ? "📺 CRT" : "") + "</span></label>");
+  add("<input type='range' id='brightnessInput' name='brightness' min='1' max='100' value='" + String(config.brightness) + "'>");
+  add("<p class='help-text mt-0'>At 30% and below the display switches to a low-drive mode: much darker, with a retro CRT-like flicker.</p>");
+  add("<label class='checkbox-label mt-0'><input type='checkbox' id='brightSchedChk' name='bright_sched' value='1' " + String(config.bright_sched ? "checked" : "") + "> Automatic Brightness by Time</label>");
+  add("<div id='brightSchedFields' class='collapsible'>");
+  add("<p class='help-text mt-0'>From each time on, the display uses that brightness until the next time. Moving the slider above overrides it until the next time starts.</p>");
+  add("<div id='bright-list-container'></div>");
+  add("<button type='button' class='btn-blue' onclick='addBrightRow()'>+ Add Time</button>");
+  add("</div>");
   add("<label class='checkbox-label mt-0' style='margin-top: 10px !important;'><input type='checkbox' id='autoCycle' name='auto_cycle' value='1' " + String(config.screen_auto_cycle ? "checked" : "") + "> Cycle Screens Automatically</label>");
   add("<p class='help-text mt-0'>If disabled, screens will only change when you press the button.</p>");
   add("<label>Screen Cycle Interval (Secs):</label><input type='number' id='screenIntInput' name='screen_int' value='" + String(config.screen_interval_sec) + "'>");
@@ -663,7 +679,7 @@ void WebServerService::handleRoot() {
   add("let formDirty = false;");
 
   add("function updateVisibility(){");
-  add("  var pairs = [['autoDetect','manualFields',true], ['nightMode','nightFields',false], ['showTime', 'timeContent',false], ['showCalendar', 'calendarContent',false], ['showWeather','weatherContent',false], ['showDaylight','daylightContent',false], ['showMoon','moonContent',false], ['showPopulation','popContent',false], ['showPc','pcContent',false], ['showCrypto','cryptoContent',false], ['showCurrency','currencyContent',false], ['showStock','stockContent',false], ['showAQI','aqiContent',false], ['showMedia','mediaContent',false], ['showBambu','bambuContent',false], ['showClaude','claudeContent',false], ['customWeatherSyncChk','customWeatherSyncFields',false], ['customAqiSyncChk','customAqiSyncFields',false], ['customStockSyncChk','customStockSyncFields',false], ['customCryptoSyncChk','customCryptoSyncFields',false], ['customCurrencySyncChk','customCurrencySyncFields',false]];");
+  add("  var pairs = [['autoDetect','manualFields',true], ['nightMode','nightFields',false], ['showTime', 'timeContent',false], ['showCalendar', 'calendarContent',false], ['showWeather','weatherContent',false], ['showDaylight','daylightContent',false], ['showMoon','moonContent',false], ['showPopulation','popContent',false], ['showPc','pcContent',false], ['showCrypto','cryptoContent',false], ['showCurrency','currencyContent',false], ['showStock','stockContent',false], ['showAQI','aqiContent',false], ['showMedia','mediaContent',false], ['showBambu','bambuContent',false], ['showClaude','claudeContent',false], ['brightSchedChk','brightSchedFields',false], ['customWeatherSyncChk','customWeatherSyncFields',false], ['customAqiSyncChk','customAqiSyncFields',false], ['customStockSyncChk','customStockSyncFields',false], ['customCryptoSyncChk','customCryptoSyncFields',false], ['customCurrencySyncChk','customCurrencySyncFields',false]];");
   add("  pairs.forEach(p => {");
   add("    var ch = document.getElementById(p[0]); if(!ch) return;");
   add("    var target = document.getElementById(p[1]);");
@@ -699,6 +715,7 @@ void WebServerService::handleRoot() {
   add("window.updateRowControls = function(containerId, maxLimit) { const container = document.getElementById(containerId); if(!container) return; const rows = container.children; const addBtn = container.nextElementSibling; if(addBtn && addBtn.tagName === 'BUTTON') { addBtn.style.display = rows.length >= maxLimit ? 'none' : 'block'; } const removeBtns = container.querySelectorAll('.btn-remove'); removeBtns.forEach(btn => { btn.style.display = rows.length <= 1 ? 'none' : 'flex'; }); };");
   add("window.removeRow = function(btn, containerId) { btn.parentElement.remove(); formDirty = true; updateRowControls(containerId, 5); };");
 
+  add("window.addBrightRow = function(time = '12:00', level = 50) { const container = document.getElementById('bright-list-container'); if (!container || container.children.length >= 5) return; const div = document.createElement('div'); div.className = 'multi-row'; div.innerHTML = `<div class='input-wrapper'><label class='mt-0'>From:</label><input type='time' name='bright_times[]' required></div><div class='input-wrapper'><label class='mt-0'>Brightness %:</label><input type='number' name='bright_levels[]' min='1' max='100' required></div><button type='button' class='btn-remove' onclick=\"removeRow(this, 'bright-list-container')\">-</button>`; container.appendChild(div); div.querySelector('input[type=time]').value = time; div.querySelector('input[type=number]').value = level; formDirty = true; updateRowControls('bright-list-container', 5); };");
   add("window.addStockRow = function(val = null) { const container = document.getElementById('stock-list-container'); if (!container || container.children.length >= 5) return; const div = document.createElement('div'); div.className = 'multi-row'; let opts = ''; ");
   for(auto s : topStocks) { add("opts += `<option value='" + String(s.ticker) + "'>" + String(s.name) + " - " + String(s.ticker) + "</option>`;"); }
   add("div.innerHTML = `<div class='input-wrapper'><label class='mt-0'>Track Stock:</label><select name='stock_symbols[]'>${opts}</select></div><button type='button' class='btn-remove' onclick=\"removeRow(this, 'stock-list-container')\">-</button>`; container.appendChild(div); if (val) div.querySelector('select').value = val; formDirty = true; updateRowControls('stock-list-container', 5); };");
@@ -715,7 +732,7 @@ void WebServerService::handleRoot() {
   }
   add("div.innerHTML = `<div class='input-wrapper'><label class='mt-0'>Base:</label><select name='currency_bases[]'>${cOpts}</select></div><div class='input-wrapper'><label class='mt-0'>Target:</label><select name='currency_targets[]'>${cOpts}</select></div><div class='input-wrapper'><label class='mt-0'>Mult:</label><select name='currency_multipliers[]'><option value='1'>1</option><option value='10'>10</option><option value='100'>100</option><option value='1000'>1000</option></select></div><button type='button' class='btn-remove' onclick=\"removeRow(this, 'currency-list-container')\">-</button>`; container.appendChild(div); if (bVal) div.querySelector(\"select[name='currency_bases[]']\").value = bVal; if (tVal) div.querySelector(\"select[name='currency_targets[]']\").value = tVal; if (mVal) div.querySelector(\"select[name='currency_multipliers[]']\").value = mVal; formDirty = true; updateRowControls('currency-list-container', 5); };");
 
-  add("['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'showClaude', 'autoCycle', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => { var el=document.getElementById(id); if(el) el.addEventListener('change', updateVisibility); });");
+  add("['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'showClaude', 'autoCycle', 'brightSchedChk', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => { var el=document.getElementById(id); if(el) el.addEventListener('change', updateVisibility); });");
   add("updateVisibility();");
 
   add("const countryGreetings = {");
@@ -879,6 +896,8 @@ void WebServerService::handleRoot() {
   add("  });");
 
   add("  e.target.querySelectorAll('input[type=\"checkbox\"]').forEach(cb => { jsonObj[cb.name] = cb.checked ? 1 : 0; });");
+  add("  jsonObj['bright_times'] = Array.from(e.target.querySelectorAll('input[name=\"bright_times[]\"]')).map(i => i.value);");
+  add("  jsonObj['bright_levels'] = Array.from(e.target.querySelectorAll('input[name=\"bright_levels[]\"]')).map(i => Math.min(100, Math.max(1, Number(i.value) || 1)));");
   add("  jsonObj['stock_symbols'] = Array.from(e.target.querySelectorAll('select[name=\"stock_symbols[]\"]')).map(s => s.value);");
   add("  jsonObj['crypto_ids'] = Array.from(e.target.querySelectorAll('select[name=\"crypto_ids[]\"]')).map(s => Number(s.value));");
   add("  jsonObj['currency_bases'] = Array.from(e.target.querySelectorAll('select[name=\"currency_bases[]\"]')).map(s => s.value);");
@@ -943,6 +962,7 @@ void WebServerService::handleRoot() {
   add("    setVal('refresh_min', d.refresh_min);");
   add("    setCb('autoCycle', d.auto_cycle);");
   add("    setVal('screen_int', d.screen_int);");
+  add("    if (d.brightness !== undefined) { setVal('brightness', d.brightness); if (window.showBrightness) window.showBrightness(); }");
   add("    setRadio('time_format', d.time_format);");
   
   add("    setCb('autoDetect', d.auto_detect);");
@@ -996,6 +1016,8 @@ void WebServerService::handleRoot() {
   add("    setCb('showStock', d.show_stock); setCb('stock_fn', d.stock_fn, true);");
   add("    setCb('customStockSyncChk', d.custom_stock_int_min > 0 ? 1 : 0);");
   add("    setVal('custom_stock_int_min', d.custom_stock_int_min > 0 ? d.custom_stock_int_min : d.refresh_min);");
+  add("    setCb('brightSchedChk', d.bright_sched);");
+  add("    const brCont = document.getElementById('bright-list-container'); if (brCont && d.bright_times) { brCont.innerHTML = ''; d.bright_times.forEach((t, i) => window.addBrightRow(t, d.bright_levels[i])); if (brCont.children.length === 0) window.addBrightRow(); }");
   add("    const stCont = document.getElementById('stock-list-container'); if (stCont) { stCont.innerHTML = ''; (d.stock_symbols && d.stock_symbols.length > 0 ? d.stock_symbols : ['AAPL']).forEach(s => window.addStockRow(s)); }");
   add("    setCb('showCrypto', d.show_crypto); setCb('crypto_fn', d.crypto_fn, true);");
   add("    setCb('customCryptoSyncChk', d.custom_crypto_int_min > 0 ? 1 : 0);");
@@ -1154,6 +1176,15 @@ void WebServerService::handleRoot() {
 
   add("  if (d.pc_status !== undefined) set('pc-link-status', d.pc_status);");
   add("}).catch(e => console.log('Sync error:', e)); } setInterval(updateData, 15000); updateData();");
+
+  // Brightness slider: live preview while dragging (throttled), persisted on release.
+  add("(function(){ const bi = document.getElementById('brightnessInput'); const bv = document.getElementById('brightnessValue'); const bm = document.getElementById('brightnessMode'); if (!bi) return;");
+  add("  const CRT_MAX = 30; window.showBrightness = () => { if (bv) bv.innerText = bi.value + '%'; if (bm) bm.innerText = Number(bi.value) <= CRT_MAX ? '📺 CRT' : ''; };");
+  add("  let last = 0, timer = null;");
+  add("  const send = (save) => fetch('/brightness', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'value=' + encodeURIComponent(bi.value) + (save ? '&save=1' : '') }).catch(() => {});");
+  add("  bi.addEventListener('input', () => { window.showBrightness(); const now = Date.now(); clearTimeout(timer); if (now - last > 150) { last = now; send(false); } else { timer = setTimeout(() => { last = Date.now(); send(false); }, 150); } });");
+  add("  bi.addEventListener('change', () => { clearTimeout(timer); send(true); });");
+  add("})();");
   add("</script></div></body></html>");
 
   if (chunk.length() > 0) {
@@ -1181,6 +1212,23 @@ void WebServerService::handleSave() {
 void WebServerService::handleUpdate() {
   String jsonResponse = JsonSerializer::buildAppStateJson(*state);
   server.send(HTTP_OK, "application/json", jsonResponse);
+}
+
+// Applies a brightness change instantly without the full save-and-resync of /save.
+// value: 1-100; save=1 also persists it (sent once the slider is released).
+void WebServerService::handleBrightness() {
+  String raw = server.arg("value");
+  int value = raw.toInt();
+  bool isNumber = raw.length() > 0 && raw.length() <= 3;
+  for (unsigned int i = 0; isNumber && i < raw.length(); i++) isNumber = isDigit(raw[i]);
+
+  if (!isNumber || value < 1 || value > 100) {
+    server.send(HTTP_BAD_REQUEST, "application/json", "{\"status\":\"error\", \"message\":\"value must be 1-100\"}");
+    return;
+  }
+
+  if (brightnessCallback) brightnessCallback(value, server.arg("save") == "1");
+  server.send(HTTP_OK, "application/json", "{\"status\":\"ok\"}");
 }
 
 void WebServerService::handlePcStats() {

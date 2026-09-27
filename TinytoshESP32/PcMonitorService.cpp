@@ -5,6 +5,21 @@
 #include "ClaudeService.h"
 #include "JsonSerializer.h"
 
+void PcMonitorService::setBrightnessCallback(SerialBrightnessCallback callback) {
+    brightnessCallback = callback;
+}
+
+// "SET_BRIGHTNESS:<1-100>:<0|1>" - the trailing flag persists the value.
+void PcMonitorService::handleBrightnessCommand(const String& args) {
+    int sep = args.indexOf(':');
+    String valueStr = sep == -1 ? args : args.substring(0, sep);
+    bool persist = sep != -1 && args.substring(sep + 1) == "1";
+
+    int value = valueStr.toInt();
+    if (valueStr.length() == 0 || valueStr.length() > 3 || value < 1 || value > 100) return;
+    if (brightnessCallback) brightnessCallback(value, persist);
+}
+
 bool PcMonitorService::handleSerial(AppState &state) {
     bool configUpdated = false;
 
@@ -18,6 +33,9 @@ bool PcMonitorService::handleSerial(AppState &state) {
                 Serial.print("SYS_UPDATE:");
                 Serial.println(json);
             } 
+            else if (incoming.startsWith("SET_BRIGHTNESS:")) {
+                handleBrightnessCommand(incoming.substring(15));
+            }
             else if (incoming.startsWith("SAVE_CFG:")) {
                 if (JsonSerializer::parseConfig(incoming.substring(9).c_str(), state)) {
                     configUpdated = true;

@@ -36,6 +36,7 @@ void updateAllDataCallback();
 void handleSingleClick();
 void handleDoubleClick();
 void handleLongPress();
+void applyBrightness(int percent, bool persist);
 
 // Service Instances
 ConfigManager configManager(PREF_NAMESPACE);
@@ -58,6 +59,10 @@ DataSyncService dataSyncService;
 NightModeService nightModeService;
 
 unsigned long lastScreenSwitch = 0;
+
+// Brightness schedule: a manual slider change overrides the active slot until the next one starts.
+int activeBrightnessSlot = -1;
+bool brightnessOverridden = false;
 
 // Core Application Logic
 
@@ -115,9 +120,38 @@ void handleLongPress() {
   nightModeService.recordInteraction();
 }
 
+// Brightness in effect now: the scheduled slot unless the user overrode it.
+int effectiveBrightness() {
+  int slot = TimeService::getActiveBrightnessSlot(appState.config);
+  if (slot != activeBrightnessSlot) {
+    activeBrightnessSlot = slot;
+    brightnessOverridden = false;
+    if (slot >= 0) {
+      Serial.printf("🔆 Brightness schedule: %s -> %d%%\n", appState.config.bright_times[slot].c_str(), appState.config.bright_levels[slot]);
+    }
+  }
+  if (slot < 0 || brightnessOverridden) return appState.config.brightness;
+  return appState.config.bright_levels[slot];
+}
+
+// Live brightness change from the Web Panel or PC App.
+// Applied immediately; written to flash only when the slider is released.
+void applyBrightness(int percent, bool persist) {
+  appState.config.brightness = constrain(percent, 1, 100);
+  brightnessOverridden = (activeBrightnessSlot >= 0);
+  displayService.setBrightness(appState.config.brightness);
+  if (!nightModeService.isLatched()) {
+    displayService.setContrast(false);
+  }
+  if (persist) {
+    configManager.saveConfig(appState.config);
+  }
+}
+
 // Full Data Sync
 void updateAllData() {
   nightModeService.reset();
+  brightnessOverridden = false;  // A saved schedule takes effect right away
   dataSyncService.runFullSync(appState);
   displayService.jumpToFirstEnabledScreen(appState);
   lastScreenSwitch = millis();
@@ -137,6 +171,9 @@ void setup() {
   hardwareService.begin(appState.config);
 
   displayService.begin(appState.config.sda_pin, appState.config.scl_pin);
+  displayService.setBrightness(appState.config.brightness);
+  displayService.setContrast(false);
+  pcMonitorService.setBrightnessCallback(applyBrightness);
   delay(3000);
 
   displayService.showOLEDStatus({"\n", "\n", "Starting...", "\n", "\n", "Config Loaded!"}, true);
@@ -186,6 +223,7 @@ void setup() {
 
   // 5. Initialize Web Server
   webServerService.setAppState(&appState);
+  webServerService.setBrightnessCallback(applyBrightness);
   webServerService.begin();
 }
 
@@ -259,6 +297,7 @@ void loop() {
     unsigned long refreshInterval = nightModeService.getRefreshIntervalMs(activeAction);
 
     if (nightModeService.isRedrawDue(refreshInterval)) {
+      displayService.setBrightness(effectiveBrightness());
       if (nightModeService.isLatched()) {
         if (activeAction == 1 || isTemporarilyAwake) {
           displayService.setContrast(true);

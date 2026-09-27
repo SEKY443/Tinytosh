@@ -1669,9 +1669,35 @@ void DisplayService::switchToPreviousScreen(const AppState& state) {
     currentSubScreen = 0;
 }
 
+// Night Mode dimming uses the darkest level; otherwise the user's brightness.
 void DisplayService::setContrast(bool dim) {
+    applyDriveLevel(dim ? 1 : brightnessPercent);
+}
+
+void DisplayService::setBrightness(int percent) {
+    brightnessPercent = constrain(percent, 1, 100);
+}
+
+// 1..LOW_DRIVE_MAX_PERCENT uses the low-drive band, the rest normal drive. In each
+// band a squared curve maps the position to contrast, since perceived OLED
+// brightness is far from linear.
+void DisplayService::applyDriveLevel(int percent) {
+    percent = constrain(percent, 1, 100);
+    if (percent == appliedLevel) return;  // Called every redraw; skip redundant I2C writes
+
+    bool lowDrive = percent <= LOW_DRIVE_MAX_PERCENT;
+    int bandStart = lowDrive ? 1 : LOW_DRIVE_MAX_PERCENT + 1;
+    int bandSpan = lowDrive ? LOW_DRIVE_MAX_PERCENT - 1 : 100 - bandStart;
+    long pos = percent - bandStart;
+    int contrast = CONTRAST_MIN + (int)(((long)(CONTRAST_MAX - CONTRAST_MIN) * pos * pos) / ((long)bandSpan * bandSpan));
+
+    display.ssd1306_command(SSD1306_SETPRECHARGE);
+    display.ssd1306_command(lowDrive ? PRECHARGE_LOW : PRECHARGE_NORMAL);
+    display.ssd1306_command(SSD1306_SETVCOMDETECT);
+    display.ssd1306_command(lowDrive ? VCOMH_LOW : VCOMH_NORMAL);
     display.ssd1306_command(SSD1306_SETCONTRAST);
-    display.ssd1306_command(dim ? CONTRAST_DIM : CONTRAST_MAX);
+    display.ssd1306_command(contrast);
+    appliedLevel = percent;
 }
 
 int DisplayService::getNextAnimationEffect(uint16_t mask) {

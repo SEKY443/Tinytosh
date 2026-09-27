@@ -5,9 +5,12 @@
 #include <ArduinoJson.h>
 #include "structs.h"
 
+typedef void (*SerialBrightnessCallback)(int percent, bool persist);
+
 class PcMonitorService {
 public:
     bool handleSerial(AppState &state);
+    void setBrightnessCallback(SerialBrightnessCallback callback);
 
 private:
     static const int JSON_BUF_SIZE = 256;
@@ -18,6 +21,9 @@ private:
     PcStats currentStats = {0.0, 0.0, 0.0, 0.0};
     char serialBuffer[JSON_BUF_SIZE];
     int bufferIndex = 0;
+    SerialBrightnessCallback brightnessCallback = nullptr;
+
+    void handleBrightnessCommand(const String& args);
 
     static void parseJson(const char* jsonString, AppState &state);
 };

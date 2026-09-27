@@ -13,6 +13,14 @@ void JsonSerializer::populateConfigDoc(const Config& config, DynamicJsonDocument
     doc["touch_pin"] = config.touch_pin;
 
     doc["refresh_min"] = config.refresh_interval_min;
+    doc["brightness"] = config.brightness;
+    doc["bright_sched"] = config.bright_sched ? 1 : 0;
+    JsonArray btArr = doc.createNestedArray("bright_times");
+    JsonArray blArr = doc.createNestedArray("bright_levels");
+    for (int i = 0; i < config.bright_count; i++) {
+        btArr.add(config.bright_times[i]);
+        blArr.add(config.bright_levels[i]);
+    }
     doc["auto_cycle"] = config.screen_auto_cycle ? 1 : 0;
     doc["screen_int"] = config.screen_interval_sec;
     doc["anim_mask"] = config.anim_mask;
@@ -267,6 +275,21 @@ bool JsonSerializer::parseConfig(const char* jsonString, AppState& state) {
     if (doc.containsKey("touch_pin")) config.touch_pin = doc["touch_pin"];
 
     if (doc.containsKey("refresh_min")) config.refresh_interval_min = doc["refresh_min"];
+    if (doc.containsKey("brightness")) config.brightness = constrain(doc["brightness"].as<int>(), 1, 100);
+    if (doc.containsKey("bright_sched")) config.bright_sched = doc["bright_sched"] == 1;
+    if (doc.containsKey("bright_times") && doc.containsKey("bright_levels")) {
+        JsonArray arrT = doc["bright_times"].as<JsonArray>();
+        JsonArray arrL = doc["bright_levels"].as<JsonArray>();
+        int count = 0;
+        for (size_t i = 0; i < arrT.size() && i < arrL.size() && count < MAX_MULTI_ENTRIES; i++) {
+            String t = arrT[i].as<String>();
+            if (!TimeService::isValidClockTime(t)) continue;  // Drop malformed rows instead of guessing
+            config.bright_times[count] = t;
+            config.bright_levels[count] = constrain(arrL[i].as<int>(), 1, 100);
+            count++;
+        }
+        if (count > 0) config.bright_count = count;
+    }
     if (doc.containsKey("auto_cycle")) config.screen_auto_cycle = doc["auto_cycle"] == 1;
     if (doc.containsKey("screen_int")) config.screen_interval_sec = doc["screen_int"];
     if (doc.containsKey("anim_mask")) config.anim_mask = doc["anim_mask"];

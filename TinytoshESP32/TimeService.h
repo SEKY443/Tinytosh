@@ -19,6 +19,8 @@ public:
     static int parseDurationToMins(String apiDuration);
     static String lookupPosixTimezone(const String& ianaTimezone);
     static int getActiveNightAction(const Config& config);
+    static int getActiveBrightnessSlot(const Config& config);
+    static bool isValidClockTime(const String& value);
 
 private:
     static constexpr const char* LOCATION_API_URL = "http://ip-api.com/json/";

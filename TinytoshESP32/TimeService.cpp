@@ -220,6 +220,36 @@ bool TimeService::isTimeInWindow(int currentMins, const String& startStr, const 
   else return (currentMins >= startMins || currentMins < endMins);
 }
 
+// Index of the schedule slot in effect now: the one with the latest start time
+// at or before the current time, wrapping to the day's last slot after midnight.
+// Returns -1 when the schedule is off, empty, or the clock is not synced yet.
+int TimeService::getActiveBrightnessSlot(const Config& config) {
+  if (!config.bright_sched || config.bright_count <= 0) return -1;
+
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 0)) return -1;
+  int currentMins = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+
+  int bestToday = -1, bestTodayMins = -1;
+  int latest = -1, latestMins = -1;
+  for (int i = 0; i < config.bright_count; i++) {
+    const String& t = config.bright_times[i];
+    if (!isValidClockTime(t)) continue;
+    int mins = t.substring(0, 2).toInt() * 60 + t.substring(3, 5).toInt();
+    if (mins <= currentMins && mins > bestTodayMins) { bestToday = i; bestTodayMins = mins; }
+    if (mins > latestMins) { latest = i; latestMins = mins; }
+  }
+  return bestToday != -1 ? bestToday : latest;
+}
+
+bool TimeService::isValidClockTime(const String& value) {
+  if (value.length() != 5 || value[2] != ':') return false;
+  for (int i : {0, 1, 3, 4}) {
+    if (!isDigit(value[i])) return false;
+  }
+  return value.substring(0, 2).toInt() < 24 && value.substring(3, 5).toInt() < 60;
+}
+
 int TimeService::getActiveNightAction(const Config& config) {
   if (!config.night_mode) return -1;
 

@@ -87,6 +87,13 @@ struct Config {
   String time_format = "24";
   bool date_display = false;
   unsigned long refresh_interval_min = 15;
+  int brightness = 100;        // Display brightness in percent (1-100)
+
+  // Brightness Schedule: from bright_times[i] on, use bright_levels[i]
+  bool bright_sched = false;
+  String bright_times[MAX_MULTI_ENTRIES] = {"07:00", "22:00", "", "", ""};
+  int bright_levels[MAX_MULTI_ENTRIES] = {80, 20, 100, 100, 100};
+  int bright_count = 2;
 
   // Theme Settings
   String theme_bg = "#000000";
