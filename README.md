@@ -36,10 +36,11 @@
 * 💱 **Currency Tracker:** Track exchange rates for **up to 5** fiat currency pairs with custom scaling multipliers.
 * 🖥️ **PC Hardware Monitor:** Connects via **USB** or **Wirelessly** to your Windows/Mac/Linux computer to show CPU Load, RAM Usage, and Network Speeds in real-time!
 * 🎧 **PC Media:** Displays currently playing track, artist, album, and playback status streamed directly from your connected computer.
+* 🤖 **Claude Code:** Live status of your Claude Code sessions (Thinking, Writing Code, Running a tool, Out of Quota) plus your 5-hour and weekly usage with reset countdowns. When Claude is blocked on you (a permission prompt, a question, or a plan to approve) the screen jumps forward with a big **"!"**. Streamed from the PC app over USB or Wi-Fi.
 * 🖨️ **Bambu 3D Printer:** Local network telemetry for your Bambu Lab printer (progress, temperatures, fans, and print status) featuring smart layouts for IDLE and PRINTING modes.
 
 ### ✨ Key Features
-* **🧩 Modular Dashboard:** The heart of Tinytosh. Enable or disable any of the screens above to build exactly the device you want — a full 13-screen rotation, a dedicated crypto ticker, or anything in between. Toggle screens on/off instantly via the Web Panel or PC App, no reflashing required.
+* **🧩 Modular Dashboard:** The heart of Tinytosh. Enable or disable any of the screens above to build exactly the device you want — a full 14-screen rotation, a dedicated crypto ticker, or anything in between. Toggle screens on/off instantly via the Web Panel or PC App, no reflashing required.
 * **🎛️ Per-Screen Configuration:** It's not just *which* screens you show — it's *how* they look. Every screen has its own dedicated settings (units, minimal vs. full layouts, hidden top bars, full names vs. compact tickers, and more), so each one behaves exactly the way you prefer.
 * **🎨 OLED Theme Engine:** Procedural design system. Pick 4 base colors, and the engine automatically calculates all hover states, UI borders, and muted text tones for both the Web Panel and PC app!
 * **🔌 Hardware Setup:** Customize your I2C and Touch pinout directly from the Web Panel without touching the code.
@@ -47,7 +48,7 @@
 * **📍 Smart Location:** Auto-detect your location via IP or manually set your exact coordinates, country, and native timezone.
 * **🔀 Drag & Drop Reordering:** Fully customize your display sequence. Grab and drag screens to change their order. The configuration UI dynamically rearranges itself to match your custom layout perfectly.
 * **👆 Touch Button Controls:** Supports an optional TTP223 touch sensor. **Single Tap** to advance to the next screen (or wake the display), **Double Tap** to jump back to the previous one, and **Long Press** to lock/unlock auto-rotation to keep your favorite screen visible indefinitely.
-* **👻 Smart Auto-Hide:** PC Monitor and PC Media screens can intelligently hide themselves and skip rotation when your PC is off, disconnected, or no media is playing.
+* **👻 Smart Auto-Hide:** PC Monitor, PC Media, and Claude Code screens can intelligently hide themselves and skip rotation when your PC is off, disconnected, or no media is playing.
 * **⏱️ Custom Data Sync Intervals:** Override the global refresh rate on a per-screen basis. Set Weather, Air Quality, Stocks, Crypto, or Currency to sync more (or less) often than the rest of your dashboard.
 * **🌙 Night Mode & Power Saving:** Set a quiet schedule to minimize sleep distractions. Choose between *Dim Display*, *Turn Display Off*, or *Dim then Turn Off* (featuring an extra time picker for gradual dimming). Features "Smart Latching" (waits for the primary screen before sleeping), 10x slower background API fetching to save power, and a temporary 30-second wake feature via the physical button.
 * **🆓 Zero Config APIs:** Uses free public APIs. No API keys required.
@@ -138,6 +139,28 @@ To display PC statistics (CPU/RAM/Net) and manage device settings, the ESP32 use
 * **Smart Connection Fallback:** The app constantly monitors your hardware and instantly prioritizes a wired USB connection for maximum stability. Yank the USB cable? The app instantly and silently falls back to Wi-Fi to keep the data flowing with zero hesitation.
 * **Native Telemetry:** Fetches system stats directly from the OS kernel—no third-party bloatware (like AIDA64) required.
 
+#### 🤖 Claude Code Screen
+
+The PC app watches Claude Code on the same computer and streams a compact status to the device. Nothing to configure: sign in to Claude Code once (`claude`), keep the PC app running, and enable the **Claude Code** screen.
+
+* **Status:** Read locally from the session transcripts in `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`). Transcript contents never leave your PC; only the state, the project folder name, and the current tool name are sent to the device.
+* **Usage:** Once a minute the app sends a 1-token request to `api.anthropic.com` with the Claude Code login already on this PC (macOS Keychain or `~/.claude/.credentials.json`) and reads the rate-limit headers. The token is only used for that request; it is never stored, logged, or sent to the device. On macOS, the first read shows a Keychain prompt — choose **Always Allow**.
+* **Exact permission alerts (recommended):** Without extra setup, a tool call that stays unanswered for a few seconds is treated as a permission prompt, so a long build can briefly show a false "!". Turn on **Exact "Needs You" alerts** in the Claude Code card of the PC app: it adds one Notification hook to Claude Code's `settings.json` (other settings and hooks are kept, the previous file is saved as `settings.json.bak-tinytosh`). Restart open Claude Code sessions afterwards. Turning it off removes the hook again.
+
+  To add it by hand instead, put this in `~/.claude/settings.json`:
+
+  ```json
+  {
+    "hooks": {
+      "Notification": [
+        { "hooks": [{ "type": "command", "command": "cat > ~/.claude/tinytosh-notify.json" }] }
+      ]
+    }
+  }
+  ```
+
+  On Windows use: `"command": "powershell -NoProfile -Command \"$input | Out-File -Encoding utf8 $env:USERPROFILE\\.claude\\tinytosh-notify.json\""`
+
 **Build it yourself:**
 ```bash
 cd TinytoshPC
@@ -188,6 +211,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 * Daylight data provided by [Sunrise-Sunset](https://sunrise-sunset.org/).
 * Moon Phase data provided by [US Naval Observatory](https://aa.usno.navy.mil/).
 * Population data provided by [The World Bank](https://data.worldbank.org/).
+* Claude Code usage data provided by the [Anthropic API](https://docs.anthropic.com/) rate-limit headers.
 
 ---
 
@@ -195,6 +219,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 | Version | Date | Key Changes |
 | :--- | :--- | :--- |
+| **v1.1.4** | *Sep 2026* | 🤖 Added **Claude Code** screen: live session status (Thinking, Writing Code, Running a tool, Out of Quota) with 5-hour and weekly usage bars and reset countdowns. ❗ A full-screen **"Needs You"** alert jumps forward and pauses rotation while Claude waits for a permission, a question, or a plan approval. 🖥️ PC app: Claude Code card, one-click **Exact "Needs You" alerts** hook installer, and a Happy Mac menu bar icon on macOS. |
 | **v1.1.3** | *Sep 2026* | ⏱️ Added **Custom Data Sync Intervals** for Weather, AQI, Stocks, Crypto, and Currency — override the global refresh rate independently per screen. 👆👆 Added **Double-Click Navigation**: single tap moves to the next screen, double tap now jumps back to the previous one. ⚙️ Internal firmware refactor for cleaner, more maintainable code. |
 | **v1.1.2** | *Sep 2026* | 🌍 Added **Population Info** screen featuring a live calculated, second-by-second world and country population ticker. |
 | **v1.1.1** | *Aug 2026* | 🌑 Added **Moon Info** screen with dynamically rendered moon phases, illumination %, and rise/set times. |
