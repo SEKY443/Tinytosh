@@ -1,5 +1,6 @@
 #include "JsonSerializer.h"
 
+#include "ClaudeService.h"
 #include "PopulationService.h"
 #include "TimeService.h"
 
@@ -96,9 +97,13 @@ void JsonSerializer::populateConfigDoc(const Config& config, DynamicJsonDocument
     doc["bambu_sn"] = config.bambu_sn;
     doc["bambu_code"] = config.bambu_code;
 
+    doc["show_claude"] = config.show_claude ? 1 : 0;
+    doc["claude_alert"] = config.claude_alert ? 1 : 0;
+
     doc["hide_empty_pc"] = config.hide_empty_pc ? 1 : 0;
     doc["hide_empty_media"] = config.hide_empty_media ? 1 : 0;
     doc["hide_empty_bambu"] = config.hide_empty_bambu ? 1 : 0;
+    doc["hide_empty_claude"] = config.hide_empty_claude ? 1 : 0;
 
     String orderStr = "";
     for(int i = 0; i < NUM_SCREENS; i++) {
@@ -109,7 +114,7 @@ void JsonSerializer::populateConfigDoc(const Config& config, DynamicJsonDocument
 }
 
 String JsonSerializer::buildConfigJson(const Config& config) {
-    DynamicJsonDocument doc(2048);
+    DynamicJsonDocument doc(3072);
     populateConfigDoc(config, doc);
     String output;
     serializeJson(doc, output);
@@ -227,6 +232,18 @@ String JsonSerializer::buildAppStateJson(const AppState& state) {
         doc["bambu_fan_aux"] = state.bambu.fan_aux;
     }
 
+    if (ClaudeService::hasData(state.claude)) {
+        doc["claude_state"] = state.claude.state;
+        doc["claude_tool"] = state.claude.tool;
+        doc["claude_proj"] = state.claude.project;
+        doc["claude_sessions"] = state.claude.busy_sessions;
+        doc["claude_ok"] = state.claude.usage_ok;
+        doc["claude_5h"] = state.claude.five_hour_pct;
+        doc["claude_5h_reset"] = state.claude.five_hour_reset_min;
+        doc["claude_7d"] = state.claude.weekly_pct;
+        doc["claude_7d_reset"] = state.claude.weekly_reset_min;
+    }
+
     String activeId = state.config.active_pc_id;
     int lastDashSync = activeId.lastIndexOf(':');
     if (lastDashSync > 3) activeId = activeId.substring(0, lastDashSync);
@@ -239,7 +256,7 @@ String JsonSerializer::buildAppStateJson(const AppState& state) {
 }
 
 bool JsonSerializer::parseConfig(const char* jsonString, AppState& state) {
-    DynamicJsonDocument doc(3072);
+    DynamicJsonDocument doc(4096);
     DeserializationError error = deserializeJson(doc, jsonString);
     if (error) return false;
 
@@ -364,6 +381,10 @@ bool JsonSerializer::parseConfig(const char* jsonString, AppState& state) {
     if (doc.containsKey("hide_empty_media")) config.hide_empty_media = doc["hide_empty_media"] == 1;
     if (doc.containsKey("hide_empty_bambu")) config.hide_empty_bambu = doc["hide_empty_bambu"] == 1;
 
+    if (doc.containsKey("show_claude")) config.show_claude = doc["show_claude"] == 1;
+    if (doc.containsKey("claude_alert")) config.claude_alert = doc["claude_alert"] == 1;
+    if (doc.containsKey("hide_empty_claude")) config.hide_empty_claude = doc["hide_empty_claude"] == 1;
+
     if (doc.containsKey("screen_order")) {
         String orderStr = doc["screen_order"].as<String>();
         int idx = 0; int startPos = 0;
@@ -405,6 +426,7 @@ bool JsonSerializer::parseConfig(const char* jsonString, AppState& state) {
     }
     
     if (!config.show_media) { state.media.status = "stopped"; state.media.name = ""; }
+    if (!config.show_claude) { ClaudeService::clear(state.claude); }
 
     return true;
 }

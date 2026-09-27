@@ -21,6 +21,7 @@ public:
     
 private:
     static const unsigned long PC_DATA_TIMEOUT_MS = 10000;
+    static const int TELEMETRY_DOC_SIZE = 2048;
     static const int HTTP_OK = 200;
     static const int HTTP_REDIRECT = 302;
     static const int HTTP_BAD_REQUEST = 400;

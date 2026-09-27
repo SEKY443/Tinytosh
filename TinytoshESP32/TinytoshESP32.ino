@@ -4,6 +4,7 @@
 #include "AirQualityService.h"
 #include "BambuService.h"
 #include "CalendarService.h"
+#include "ClaudeService.h"
 #include "ConfigManager.h"
 #include "CryptoService.h"
 #include "CurrencyService.h"
@@ -199,6 +200,17 @@ void loop() {
     updateAllData();
   }
 
+  // Claude Code: bring its screen forward the moment Claude is blocked on the user
+  static bool claudeWasWaiting = false;
+  bool claudeWaiting = appState.config.claude_alert
+                       && ClaudeService::needsUser(appState.claude)
+                       && displayService.isScreenEnabled(appState, SCREEN_CLAUDE);
+  if (claudeWaiting && !claudeWasWaiting && !nightModeService.isLatched()) {
+    displayService.jumpToScreen(appState, SCREEN_CLAUDE);
+    lastScreenSwitch = millis();
+  }
+  claudeWasWaiting = claudeWaiting;
+
   // 1. Night Latch Logic
   int activeAction = TimeService::getActiveNightAction(appState.config);
   bool justExitedNightMode = nightModeService.update(activeAction, displayService.isOnFirstEnabledScreen(appState));
@@ -215,7 +227,8 @@ void loop() {
   dataSyncService.maybeStartBackgroundSync(appState, nightModeService.isLatched());
 
   // 3. Auto Screen Switching Logic
-  if (appState.config.screen_auto_cycle && !nightModeService.isLatched()) {
+  bool holdOnClaude = claudeWaiting && displayService.getCurrentScreen() == SCREEN_CLAUDE;
+  if (appState.config.screen_auto_cycle && !nightModeService.isLatched() && !holdOnClaude) {
     unsigned long intervalMs = appState.config.screen_interval_sec * 1000;
 
     if (millis() - lastScreenSwitch >= intervalMs) {

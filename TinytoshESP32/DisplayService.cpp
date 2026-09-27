@@ -4,6 +4,7 @@
 #include <Fonts/Picopixel.h>
 #include <time.h>
 
+#include "ClaudeService.h"
 #include "images.h"
 #include "PopulationService.h"
 #include "TimeService.h"
@@ -1318,6 +1319,126 @@ void DisplayService::drawBambuScreen(const BambuData& data) {
     display.print(timeStr);
 }
 
+void DisplayService::drawClaudeScreen(const ClaudeData& claude) {
+    if (!ClaudeService::hasData(claude)) {
+        drawInfoScreen(nullptr, "No Claude");
+        return;
+    }
+
+    if (ClaudeService::needsUser(claude)) {
+        drawClaudeAlert(claude);
+        return;
+    }
+
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextWrap(false);
+    display.setTextSize(1);
+    display.setFont();
+
+    // 1. Status header (inverted)
+    String status = "IDLE";
+    if (claude.state == "offline")       status = "NO SESSION";
+    else if (claude.state == "thinking") status = "THINKING";
+    else if (claude.state == "writing")  status = "WRITING CODE";
+    else if (claude.state == "tool")     status = "RUNNING";
+    else if (claude.state == "limit")    status = "OUT OF QUOTA";
+
+    display.fillRect(0, 0, 128, 11, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(2, 2);
+    display.print(status);
+    if (claude.busy_sessions > 1) {
+        String count = "x" + String(claude.busy_sessions);
+        display.setCursor(126 - count.length() * 6, 2);
+        display.print(count);
+    }
+    display.setTextColor(SSD1306_WHITE);
+
+    // 2. Context line: project / tool, or when the quota comes back
+    String context = claude.project;
+    if (claude.state == "limit") {
+        int resetMin = claude.weekly_pct >= 100 ? claude.weekly_reset_min : claude.five_hour_reset_min;
+        context = claude.usage_ok ? "BACK IN " + ClaudeService::formatDuration(resetMin) : "";
+    } else if ((claude.state == "tool" || claude.state == "writing") && claude.tool.length() > 0) {
+        context = context.length() > 0 ? context + " / " + claude.tool : claude.tool;
+    }
+    display.setCursor(0, 14);
+    display.print(fitText(context, 21));
+
+    display.drawFastHLine(0, 24, 128, SSD1306_WHITE);
+
+    // 3. Usage
+    if (!claude.usage_ok) {
+        const char* msg = "USAGE N/A";
+        display.setCursor((128 - strlen(msg) * 6) / 2, 40);
+        display.print(msg);
+        return;
+    }
+    drawUsageRow(28, "5H", claude.five_hour_pct, claude.five_hour_reset_min);
+    drawUsageRow(46, "7D", claude.weekly_pct, claude.weekly_reset_min);
+}
+
+// Full-screen call to action: Claude is blocked until the user answers.
+void DisplayService::drawClaudeAlert(const ClaudeData& claude) {
+    display.clearDisplay();
+    display.setTextWrap(false);
+    display.setFont();
+
+    // Big "!" on a solid panel so it reads from across the desk
+    display.fillRect(0, 0, 40, 64, SSD1306_WHITE);
+    display.fillRoundRect(15, 7, 10, 34, 3, SSD1306_BLACK);
+    display.fillRoundRect(15, 46, 10, 10, 3, SSD1306_BLACK);
+
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(2);
+    display.setCursor(48, 4);
+    display.print("NEEDS");
+    display.setCursor(48, 22);
+    display.print("YOU");
+
+    String action = "PERMISSION";
+    if (claude.tool == "AskUserQuestion")   action = "QUESTION";
+    else if (claude.tool == "ExitPlanMode") action = "PLAN REVIEW";
+    else if (claude.tool.length() > 0)      action = "ALLOW " + claude.tool;
+    action.toUpperCase();
+
+    display.setTextSize(1);
+    display.setCursor(48, 43);
+    display.print(fitText(action, 13));
+    display.setCursor(48, 54);
+    display.print(fitText(claude.project, 13));
+}
+
+void DisplayService::drawUsageRow(int y, const char* label, int percent, int resetMinutes) {
+    const int BAR_X = 16;
+    const int BAR_W = 82;
+    const int BAR_H = 7;
+
+    display.setFont();
+    display.setTextSize(1);
+    display.setCursor(0, y);
+    display.print(label);
+
+    display.drawRect(BAR_X, y, BAR_W, BAR_H, SSD1306_WHITE);
+    int fillW = (constrain(percent, 0, 100) * (BAR_W - 4)) / 100;
+    if (fillW > 0) display.fillRect(BAR_X + 2, y + 2, fillW, BAR_H - 4, SSD1306_WHITE);
+
+    String pct = String(percent) + "%";
+    display.setCursor(128 - pct.length() * 6, y);
+    display.print(pct);
+
+    display.setFont(&Picopixel);
+    display.setCursor(BAR_X, y + 14);
+    display.print("RESETS IN " + ClaudeService::formatDuration(resetMinutes));
+    display.setFont();
+}
+
+String DisplayService::fitText(String text, int maxChars) {
+    if ((int)text.length() <= maxChars) return text;
+    return text.substring(0, maxChars - 2) + "..";
+}
+
 void DisplayService::drawInfoScreen(const unsigned char* image, String text) {
     display.clearDisplay();
 
@@ -1391,6 +1512,11 @@ bool DisplayService::isScreenEnabled(const AppState& state, int screenIndex) {
             }
             return true;
         }
+        case SCREEN_CLAUDE: {
+            if (!config.show_claude) return false;
+            if (config.hide_empty_claude && !ClaudeService::hasData(state.claude)) return false;
+            return true;
+        }
         default: return false;
     }
 }
@@ -1410,6 +1536,7 @@ void DisplayService::drawScreen(int screenIndex, const AppState& state, int subI
     case SCREEN_PC_MONITOR: drawPcScreen(state.pc); break;
     case SCREEN_PC_MEDIA: drawMediaScreen(state.media); break;
     case SCREEN_BAMBU: drawBambuScreen(state.bambu); break;
+    case SCREEN_CLAUDE: drawClaudeScreen(state.claude); break;
   }
 }
 
@@ -1429,6 +1556,17 @@ int DisplayService::getFirstEnabledScreen(const AppState& state) {
 
 void DisplayService::jumpToFirstEnabledScreen(const AppState& state) {
     currentScreen = getFirstEnabledScreen(state);
+}
+
+void DisplayService::jumpToScreen(const AppState& state, int screenIndex) {
+    if (screenIndex == currentScreen && currentSubScreen == 0) return;
+    animateTransition(currentScreen, currentSubScreen, screenIndex, 0, state);
+    currentScreen = screenIndex;
+    currentSubScreen = 0;
+}
+
+int DisplayService::getCurrentScreen() const {
+    return currentScreen;
 }
 
 bool DisplayService::isOnFirstEnabledScreen(const AppState& state) {

@@ -27,6 +27,7 @@ public:
     void drawPcScreen(const PcStats& pcStats);
     void drawMediaScreen(const PcMedia& media);
     void drawBambuScreen(const BambuData& bambu);
+    void drawClaudeScreen(const ClaudeData& claude);
     void drawInfoScreen(const unsigned char* image = nullptr, String text = "No Data");
 
     void drawScreen(int screenIndex, const AppState& state, int subIndex = 0);
@@ -37,6 +38,8 @@ public:
     void switchToNextScreen(const AppState& state);
     void switchToPreviousScreen(const AppState& state);
     void jumpToFirstEnabledScreen(const AppState& state);
+    void jumpToScreen(const AppState& state, int screenIndex);
+    int getCurrentScreen() const;
     bool isOnFirstEnabledScreen(const AppState& state);
 
     void setContrast(bool dim);
@@ -62,6 +65,10 @@ private:
 
     const unsigned char* getWeatherBitmap(int wmo_code, bool is_day);
     const unsigned char* getAQIBitmap(int val, bool is_eu);
+
+    void drawClaudeAlert(const ClaudeData& claude);
+    void drawUsageRow(int y, const char* label, int percent, int resetMinutes);
+    static String fitText(String text, int maxChars);
 };
 
 #endif

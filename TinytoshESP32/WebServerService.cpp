@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
+#include "ClaudeService.h"
 
 #include "JsonSerializer.h"
 #include "TimeService.h"
@@ -303,6 +304,7 @@ void WebServerService::handleRoot() {
       case SCREEN_PC_MONITOR: targetId = "showPc"; break;
       case SCREEN_PC_MEDIA: targetId = "showMedia"; break;
       case SCREEN_BAMBU: targetId = "showBambu"; break;
+      case SCREEN_CLAUDE: targetId = "showClaude"; break;
     }
     
     add("<li class='sortable-item' data-id='" + String(screenId) + "' data-target='" + targetId + "' draggable='true'>");
@@ -632,6 +634,25 @@ void WebServerService::handleRoot() {
               add("</div></div>");
               break;
           }
+
+          case SCREEN_CLAUDE: {
+              add("<div class='panel' id='panel-" + String(screenId) + "'>");
+              add("<label class='checkbox-label mt-0'><input type='checkbox' id='showClaude' name='show_claude' value='1' " + String(config.show_claude ? "checked" : "") + "> Claude Code Screen</label>");
+              add("<div id='claudeContent' class='collapsible'>");
+              add("<div id='claude-no-data' class='no-data-tile'>🤖 Claude Code data will be available once Tinytosh PC is connected</div><div id='claude-grid' class='hidden'>");
+              add("<div class='dashboard-grid'>");
+              add("<div class='tile'><div class='tile-icon'>🤖</div><div class='tile-value' id='claude-state' style='font-size:1.2rem'>--</div><div class='tile-label'>Status</div></div>");
+              add("<div class='tile'><div class='tile-icon'>📁</div><div class='tile-value' id='claude-proj' style='font-size:1.2rem'>--</div><div class='tile-label'>Project</div></div>");
+              add("<div class='tile'><div class='tile-icon'>⏱️</div><div class='tile-value' id='claude-5h' style='font-size:1.2rem'>--</div><div class='tile-label'>5-Hour Usage</div></div>");
+              add("<div class='tile'><div class='tile-icon'>📅</div><div class='tile-value' id='claude-7d' style='font-size:1.2rem'>--</div><div class='tile-label'>Weekly Usage</div></div>");
+              add("</div></div>");
+              add("<label class='checkbox-label'><input type='checkbox' name='claude_alert' value='1' " + String(config.claude_alert ? "checked" : "") + "> Jump to this screen when Claude needs you</label>");
+              add("<p class='help-text mt-0'>Shows a big \"!\" and pauses rotation while Claude waits for a permission or an answer.</p>");
+              add("<label class='checkbox-label'><input type='checkbox' name='hide_empty_claude' value='1' " + String(config.hide_empty_claude ? "checked" : "") + "> Hide empty screen</label>");
+              add("<p class='help-text mt-0'>Screen is excluded from rotation when there is no data.</p>");
+              add("</div></div>");
+              break;
+          }
       }
   }
 
@@ -642,7 +663,7 @@ void WebServerService::handleRoot() {
   add("let formDirty = false;");
 
   add("function updateVisibility(){");
-  add("  var pairs = [['autoDetect','manualFields',true], ['nightMode','nightFields',false], ['showTime', 'timeContent',false], ['showCalendar', 'calendarContent',false], ['showWeather','weatherContent',false], ['showDaylight','daylightContent',false], ['showMoon','moonContent',false], ['showPopulation','popContent',false], ['showPc','pcContent',false], ['showCrypto','cryptoContent',false], ['showCurrency','currencyContent',false], ['showStock','stockContent',false], ['showAQI','aqiContent',false], ['showMedia','mediaContent',false], ['showBambu','bambuContent',false], ['customWeatherSyncChk','customWeatherSyncFields',false], ['customAqiSyncChk','customAqiSyncFields',false], ['customStockSyncChk','customStockSyncFields',false], ['customCryptoSyncChk','customCryptoSyncFields',false], ['customCurrencySyncChk','customCurrencySyncFields',false]];");
+  add("  var pairs = [['autoDetect','manualFields',true], ['nightMode','nightFields',false], ['showTime', 'timeContent',false], ['showCalendar', 'calendarContent',false], ['showWeather','weatherContent',false], ['showDaylight','daylightContent',false], ['showMoon','moonContent',false], ['showPopulation','popContent',false], ['showPc','pcContent',false], ['showCrypto','cryptoContent',false], ['showCurrency','currencyContent',false], ['showStock','stockContent',false], ['showAQI','aqiContent',false], ['showMedia','mediaContent',false], ['showBambu','bambuContent',false], ['showClaude','claudeContent',false], ['customWeatherSyncChk','customWeatherSyncFields',false], ['customAqiSyncChk','customAqiSyncFields',false], ['customStockSyncChk','customStockSyncFields',false], ['customCryptoSyncChk','customCryptoSyncFields',false], ['customCurrencySyncChk','customCurrencySyncFields',false]];");
   add("  pairs.forEach(p => {");
   add("    var ch = document.getElementById(p[0]); if(!ch) return;");
   add("    var target = document.getElementById(p[1]);");
@@ -694,7 +715,7 @@ void WebServerService::handleRoot() {
   }
   add("div.innerHTML = `<div class='input-wrapper'><label class='mt-0'>Base:</label><select name='currency_bases[]'>${cOpts}</select></div><div class='input-wrapper'><label class='mt-0'>Target:</label><select name='currency_targets[]'>${cOpts}</select></div><div class='input-wrapper'><label class='mt-0'>Mult:</label><select name='currency_multipliers[]'><option value='1'>1</option><option value='10'>10</option><option value='100'>100</option><option value='1000'>1000</option></select></div><button type='button' class='btn-remove' onclick=\"removeRow(this, 'currency-list-container')\">-</button>`; container.appendChild(div); if (bVal) div.querySelector(\"select[name='currency_bases[]']\").value = bVal; if (tVal) div.querySelector(\"select[name='currency_targets[]']\").value = tVal; if (mVal) div.querySelector(\"select[name='currency_multipliers[]']\").value = mVal; formDirty = true; updateRowControls('currency-list-container', 5); };");
 
-  add("['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'autoCycle', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => { var el=document.getElementById(id); if(el) el.addEventListener('change', updateVisibility); });");
+  add("['autoDetect', 'nightMode', 'showTime', 'showCalendar', 'showWeather', 'showDaylight', 'showMoon', 'showPopulation', 'showPc', 'showCrypto', 'showCurrency', 'showStock', 'showAQI', 'showMedia', 'showBambu', 'showClaude', 'autoCycle', 'customWeatherSyncChk', 'customAqiSyncChk', 'customStockSyncChk', 'customCryptoSyncChk', 'customCurrencySyncChk'].forEach(id => { var el=document.getElementById(id); if(el) el.addEventListener('change', updateVisibility); });");
   add("updateVisibility();");
 
   add("const countryGreetings = {");
@@ -801,7 +822,7 @@ void WebServerService::handleRoot() {
   add("  reorderPhysicalPanels(orderInput.value);");
   add("}");
 
-  add("const panelCheckboxes = ['showTime', 'showCalendar', 'showWeather', 'showAQI', 'showDaylight', 'showMoon', 'showPopulation', 'showCrypto', 'showCurrency', 'showStock', 'showPc', 'showMedia', 'showBambu'];");
+  add("const panelCheckboxes = ['showTime', 'showCalendar', 'showWeather', 'showAQI', 'showDaylight', 'showMoon', 'showPopulation', 'showCrypto', 'showCurrency', 'showStock', 'showPc', 'showMedia', 'showBambu', 'showClaude'];");
   add("panelCheckboxes.forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', syncScreenOrder); });");
 
   add("function getDragAfterEl(y) {");
@@ -995,6 +1016,7 @@ void WebServerService::handleRoot() {
   add("    setCb('hide_empty_pc', d.hide_empty_pc, true);");
   add("    setCb('hide_empty_media', d.hide_empty_media, true);");
   add("    setCb('hide_empty_bambu', d.hide_empty_bambu, true);");
+  add("    setCb('showClaude', d.show_claude); setCb('claude_alert', d.claude_alert, true); setCb('hide_empty_claude', d.hide_empty_claude, true);");
 
   add("    const mask = d.anim_mask;");
   add("    document.querySelectorAll('.anim-chk').forEach(cb => { cb.checked = (mask & parseInt(cb.value)) !== 0; });");
@@ -1120,6 +1142,16 @@ void WebServerService::handleRoot() {
   add("    set('bambu-fans', 'Part: ' + d.bambu_fan_part + ' | Aux: ' + d.bambu_fan_aux);");
   add("  } else { hide('bambu-no-data', false); hide('bambu-grid', true); }");
   
+  add("  if (d.claude_state !== undefined) {");
+  add("    hide('claude-no-data', true); hide('claude-grid', false);");
+  add("    const cl = {offline:'No Session', idle:'Idle', thinking:'Thinking', tool:'Running Tool', writing:'Writing Code', permission:'❗ Needs You', limit:'Out of Quota'};");
+  add("    const dur = m => m <= 0 ? 'now' : m < 60 ? m + 'm' : m < 1440 ? Math.floor(m/60) + 'h ' + (m%60) + 'm' : Math.floor(m/1440) + 'd ' + Math.floor(m/60)%24 + 'h';");
+  add("    set('claude-state', cl[d.claude_state] || d.claude_state);");
+  add("    set('claude-proj', d.claude_proj || '--');");
+  add("    set('claude-5h', d.claude_ok ? d.claude_5h + '% (resets ' + dur(d.claude_5h_reset) + ')' : 'N/A');");
+  add("    set('claude-7d', d.claude_ok ? d.claude_7d + '% (resets ' + dur(d.claude_7d_reset) + ')' : 'N/A');");
+  add("  } else { hide('claude-no-data', false); hide('claude-grid', true); }");
+
   add("  if (d.pc_status !== undefined) set('pc-link-status', d.pc_status);");
   add("}).catch(e => console.log('Sync error:', e)); } setInterval(updateData, 15000); updateData();");
   add("</script></div></body></html>");
@@ -1159,7 +1191,7 @@ void WebServerService::handlePcStats() {
   
   String body = server.arg("plain");
   
-  DynamicJsonDocument doc(1024); 
+  DynamicJsonDocument doc(TELEMETRY_DOC_SIZE);
   DeserializationError error = deserializeJson(doc, body);
   
   if (error) {
@@ -1190,6 +1222,8 @@ void WebServerService::handlePcStats() {
     state->media.author = doc["media_author"] | "";
     state->media.album = doc["media_album"] | "";
     state->media.last_update = millis();
+
+    ClaudeService::applyTelemetry(doc, state->claude);
 
     server.send(HTTP_OK, "application/json", "{\"status\":\"ok\"}");
   } else {

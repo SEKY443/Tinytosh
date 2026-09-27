@@ -2,6 +2,7 @@
 
 #include <HardwareSerial.h>
 
+#include "ClaudeService.h"
 #include "JsonSerializer.h"
 
 bool PcMonitorService::handleSerial(AppState &state) {
@@ -44,11 +45,13 @@ bool PcMonitorService::handleSerial(AppState &state) {
         state.media.album = "";
     }
 
+    ClaudeService::expireIfStale(state.claude, activeTimeout);
+
     return configUpdated;
 }
 
 void PcMonitorService::parseJson(const char* jsonString, AppState &state) {
-    DynamicJsonDocument doc(1024); 
+    DynamicJsonDocument doc(TELEMETRY_DOC_SIZE);
     DeserializationError error = deserializeJson(doc, jsonString);
 
     if (!error) {
@@ -61,6 +64,8 @@ void PcMonitorService::parseJson(const char* jsonString, AppState &state) {
         state.media.name = doc["media_name"] | "";
         state.media.author = doc["media_author"] | "";
         state.media.album = doc["media_album"] | "";
+
+        ClaudeService::applyTelemetry(doc, state.claude);
         
         String incoming_id = doc["pc_id"] | "";
         if (incoming_id != "") {

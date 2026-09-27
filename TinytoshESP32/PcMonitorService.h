@@ -11,6 +11,7 @@ public:
 
 private:
     static const int JSON_BUF_SIZE = 256;
+    static const int TELEMETRY_DOC_SIZE = 2048;
     static const unsigned long DATA_TIMEOUT_MS = 3000;
     static const unsigned long WIFI_DATA_TIMEOUT_MS = 10000;
 
