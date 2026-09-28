@@ -960,6 +960,7 @@ async function fetchDeviceData() {
             setVal('custom_stock_int_min', d.custom_stock_int_min > 0 ? d.custom_stock_int_min : d.refresh_min);
             const stCont = document.getElementById("stock-list-container");
             setCb('brightSchedChk', d.bright_sched);
+            setCb('invertChk', d.invert_display);
             const brCont = document.getElementById('bright-list-container');
             if (brCont && d.bright_times) {
                 brCont.innerHTML = "";

@@ -145,6 +145,9 @@
             <input type="range" id="brightnessInput" name="brightness" min="1" max="100" value="100">
             <p class="help-text mt-0">At 30% and below the display switches to a low-drive mode: much darker, with a retro CRT-like flicker.</p>
 
+            <label class="checkbox-label"><input type="checkbox" id="invertChk" name="invert_display"> Invert Colors</label>
+            <p class="help-text mt-0">Swaps black and white. Most pixels stay lit, so the display gets brighter and wears faster; pairs well with a low brightness.</p>
+
             <label class="checkbox-label"><input type="checkbox" id="brightSchedChk" name="bright_sched"> Automatic Brightness by Time</label>
             <div id="brightSchedFields" class="collapsible">
               <p class="help-text mt-0">From each time on, the display uses that brightness until the next time. Moving the slider above overrides it until the next time starts.</p>
