@@ -44,6 +44,7 @@ public:
 
     void setContrast(bool dim);
     void setBrightness(int percent);
+    void setInverted(bool inverted);
 
 private:
     uint8_t screenBufferOld[1024];
@@ -64,6 +65,7 @@ private:
     static const uint8_t VCOMH_LOW = 0x00;
 
     int brightnessPercent = 100;
+    int appliedInvert = -1;
     int appliedLevel = -1;
 
     void applyDriveLevel(int percent);

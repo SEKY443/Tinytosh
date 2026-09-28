@@ -192,6 +192,8 @@ void WebServerService::handleRoot() {
   add("<label>Display Brightness: <span id='brightnessValue'>" + String(config.brightness) + "%</span> <span id='brightnessMode'>" + String(config.brightness <= 30 ? "📺 CRT" : "") + "</span></label>");
   add("<input type='range' id='brightnessInput' name='brightness' min='1' max='100' value='" + String(config.brightness) + "'>");
   add("<p class='help-text mt-0'>At 30% and below the display switches to a low-drive mode: much darker, with a retro CRT-like flicker.</p>");
+  add("<label class='checkbox-label mt-0'><input type='checkbox' id='invertChk' name='invert_display' value='1' " + String(config.invert_display ? "checked" : "") + "> Invert Colors</label>");
+  add("<p class='help-text mt-0'>Swaps black and white. Most pixels stay lit, so the display gets brighter and wears faster; pairs well with a low brightness.</p>");
   add("<label class='checkbox-label mt-0'><input type='checkbox' id='brightSchedChk' name='bright_sched' value='1' " + String(config.bright_sched ? "checked" : "") + "> Automatic Brightness by Time</label>");
   add("<div id='brightSchedFields' class='collapsible'>");
   add("<p class='help-text mt-0'>From each time on, the display uses that brightness until the next time. Moving the slider above overrides it until the next time starts.</p>");
@@ -1016,7 +1018,7 @@ void WebServerService::handleRoot() {
   add("    setCb('showStock', d.show_stock); setCb('stock_fn', d.stock_fn, true);");
   add("    setCb('customStockSyncChk', d.custom_stock_int_min > 0 ? 1 : 0);");
   add("    setVal('custom_stock_int_min', d.custom_stock_int_min > 0 ? d.custom_stock_int_min : d.refresh_min);");
-  add("    setCb('brightSchedChk', d.bright_sched);");
+  add("    setCb('brightSchedChk', d.bright_sched); setCb('invertChk', d.invert_display);");
   add("    const brCont = document.getElementById('bright-list-container'); if (brCont && d.bright_times) { brCont.innerHTML = ''; d.bright_times.forEach((t, i) => window.addBrightRow(t, d.bright_levels[i])); if (brCont.children.length === 0) window.addBrightRow(); }");
   add("    const stCont = document.getElementById('stock-list-container'); if (stCont) { stCont.innerHTML = ''; (d.stock_symbols && d.stock_symbols.length > 0 ? d.stock_symbols : ['AAPL']).forEach(s => window.addStockRow(s)); }");
   add("    setCb('showCrypto', d.show_crypto); setCb('crypto_fn', d.crypto_fn, true);");

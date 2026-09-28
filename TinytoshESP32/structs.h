@@ -88,6 +88,7 @@ struct Config {
   bool date_display = false;
   unsigned long refresh_interval_min = 15;
   int brightness = 100;        // Display brightness in percent (1-100)
+  bool invert_display = false;  // Swap black and white
 
   // Brightness Schedule: from bright_times[i] on, use bright_levels[i]
   bool bright_sched = false;

@@ -1674,6 +1674,13 @@ void DisplayService::setContrast(bool dim) {
     applyDriveLevel(dim ? 1 : brightnessPercent);
 }
 
+// Hardware inversion (SSD1306 0xA7): no redraw needed and transitions are unaffected.
+void DisplayService::setInverted(bool inverted) {
+    if ((int)inverted == appliedInvert) return;  // Called every redraw; skip redundant I2C writes
+    display.invertDisplay(inverted);
+    appliedInvert = inverted;
+}
+
 void DisplayService::setBrightness(int percent) {
     brightnessPercent = constrain(percent, 1, 100);
 }

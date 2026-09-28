@@ -173,6 +173,7 @@ void setup() {
   displayService.begin(appState.config.sda_pin, appState.config.scl_pin);
   displayService.setBrightness(appState.config.brightness);
   displayService.setContrast(false);
+  displayService.setInverted(appState.config.invert_display);
   pcMonitorService.setBrightnessCallback(applyBrightness);
   delay(3000);
 
@@ -283,6 +284,7 @@ void loop() {
 
   if (!shouldDrawScreen) {
     if (!screenClearedForNight) {
+      displayService.setInverted(false);  // An inverted blank screen would light every pixel
       displayService.display.clearDisplay();
       displayService.display.display();
       screenClearedForNight = true;
@@ -298,6 +300,7 @@ void loop() {
 
     if (nightModeService.isRedrawDue(refreshInterval)) {
       displayService.setBrightness(effectiveBrightness());
+      displayService.setInverted(appState.config.invert_display);
       if (nightModeService.isLatched()) {
         if (activeAction == 1 || isTemporarilyAwake) {
           displayService.setContrast(true);
