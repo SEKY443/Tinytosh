@@ -172,7 +172,12 @@ impl ActivityMonitor {
                 _ => false,
             };
 
-            let (activity, tool) = resolve(&cached.tail, now, mtime, hook_says_permission, hook.is_some());
+            let (activity, tool) = if hook.map_or(false, |h| hook_prompt_open(h.last_permission, mtime, now)) {
+                let tool = match &cached.tail { Tail::PendingTool(name, _) => name.clone(), _ => String::new() };
+                (Activity::Permission, tool)
+            } else {
+                resolve(&cached.tail, now, mtime, hook_says_permission, hook.is_some())
+            };
             if activity >= Activity::Thinking {
                 busy_sessions = busy_sessions.saturating_add(1);
             }
@@ -196,6 +201,14 @@ impl ActivityMonitor {
             None => ActivitySnapshot::default(),
         }
     }
+}
+
+// Claude Code writes a pending question or permission request to the transcript only
+// after it is answered, so the transcript alone cannot show the wait. A permission
+// notification newer than the last transcript write means the prompt is still open;
+// the answer is written to the transcript, which then makes it older and clears it.
+fn hook_prompt_open(last_permission: u64, transcript_mtime: u64, now: u64) -> bool {
+    last_permission > 0 && last_permission >= transcript_mtime && now.saturating_sub(last_permission) < WAITING_WINDOW_SECS
 }
 
 // `session_hooked`: the hook has reported for this session, so its silence means
@@ -1236,6 +1249,17 @@ mod tests {
         assert!(!events[1].is_permission);
         assert_eq!(events[2].session_id, "evil", "path characters are stripped from session ids");
         assert!(events[2].is_permission);
+    }
+
+    #[test]
+    fn open_prompt_follows_the_hook_until_the_transcript_moves_on() {
+        const T0: u64 = 1_000_000;
+        // Prompt at T0+6 while the transcript last changed at T0 (question not written yet).
+        assert!(hook_prompt_open(T0 + 6, T0, T0 + 10));
+        // Answer written at T0+30: the notification is now older than the transcript.
+        assert!(!hook_prompt_open(T0 + 6, T0 + 30, T0 + 31));
+        assert!(!hook_prompt_open(0, T0, T0 + 1), "no notification");
+        assert!(!hook_prompt_open(T0, T0, T0 + WAITING_WINDOW_SECS), "expires");
     }
 
     #[test]
