@@ -21,13 +21,19 @@ use any_ascii::any_ascii;
 use serde_json::Value;
 
 // Activity detection
-const ACTIVE_WINDOW_SECS: u64 = 600;        // Sessions untouched for longer are ignored
+const ACTIVE_WINDOW_SECS: u64 = 600;        // A running tool this old counts as idle
+const WAITING_WINDOW_SECS: u64 = 3600;      // Sessions stay monitored this long; a question can wait a while
 const STALE_WORK_SECS: u64 = 300;           // A "working" transcript this old most likely crashed or was closed
 const TEXT_SETTLE_SECS: u64 = 3;            // Trailing assistant text with no follow-up means the turn ended
 const TAIL_BYTES: u64 = 512 * 1024;         // Tool results can be large; read enough to reach a full entry
-const HOOK_FILE_NAME: &str = "tinytosh-notify.json";
-const HOOK_TRUST_SECS: u64 = 7 * 24 * 3600; // Hook file seen recently => hook installed, stop guessing
-const MAX_LABEL_LEN: usize = 20;
+// The hook appends one "<epoch seconds> <notification json>" line per notification, so
+// several sessions waiting at once never overwrite each other.
+const HOOK_LOG_NAME: &str = "tinytosh-notify.jsonl";
+const LEGACY_HOOK_FILE_NAME: &str = "tinytosh-notify.json"; // Earlier hook: last notification only
+const HOOK_MARKER: &str = "tinytosh-notify";                // Identifies Tinytosh entries in settings.json
+const HOOK_LOG_TAIL_BYTES: u64 = 64 * 1024;
+const HOOK_LOG_ROTATE_BYTES: u64 = 512 * 1024;
+const MAX_LABEL_LEN: usize = 24; // The device cuts to its 21-column line with ".."
 
 // Usage polling
 pub const USAGE_POLL_SECS: u64 = 60;
@@ -82,6 +88,7 @@ pub struct ActivitySnapshot {
     pub tool: String,
     pub project: String,
     pub busy_sessions: u8,
+    pub last_turn: String, // e.g. "Cogitated for 54s"; set only when idle
 }
 
 struct CachedTail {
@@ -89,40 +96,69 @@ struct CachedTail {
     mtime: u64,
     tail: Tail,
     project: String,
+    last_turn: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct HookEvent {
     session_id: String,
     is_permission: bool,
-    mtime: u64,
+    at: u64,
+}
+
+// What the hook has reported for one session. Its presence alone means the hook
+// is active in that session, so permission prompts no longer need to be guessed.
+#[derive(Clone, Copy, Debug, Default)]
+struct SessionHook {
+    last_permission: u64,
 }
 
 pub struct ActivityMonitor {
     config_dir: PathBuf,
     cache: HashMap<PathBuf, CachedTail>,
+    hooks: HashMap<String, SessionHook>,
 }
 
 impl ActivityMonitor {
     pub fn new() -> Self {
-        Self { config_dir: claude_config_dir(), cache: HashMap::new() }
+        Self { config_dir: claude_config_dir(), cache: HashMap::new(), hooks: HashMap::new() }
+    }
+
+    fn refresh_hooks(&mut self, active_ids: &HashSet<String>) {
+        let log = self.config_dir.join(HOOK_LOG_NAME);
+        if fs::metadata(&log).map_or(false, |m| m.len() > HOOK_LOG_ROTATE_BYTES) {
+            let _ = fs::rename(&log, log.with_extension("jsonl.1"));
+        }
+
+        let mut events = read_file_tail(&log, HOOK_LOG_TAIL_BYTES).map(|t| parse_hook_log(&t)).unwrap_or_default();
+        events.extend(read_legacy_hook_event(&self.config_dir.join(LEGACY_HOOK_FILE_NAME)));
+
+        self.hooks.retain(|id, _| active_ids.contains(id));
+        for event in events.into_iter().filter(|e| active_ids.contains(&e.session_id)) {
+            let entry = self.hooks.entry(event.session_id).or_default();
+            if event.is_permission {
+                entry.last_permission = entry.last_permission.max(event.at);
+            }
+        }
     }
 
     pub fn poll(&mut self) -> ActivitySnapshot {
         let now = unix_now();
         let sessions = recent_transcripts(&self.config_dir.join("projects"), now);
-        let hook = read_hook_event(&self.config_dir.join(HOOK_FILE_NAME));
-        let hook_installed = hook.as_ref().map_or(false, |h| now.saturating_sub(h.mtime) < HOOK_TRUST_SECS);
+        let active_ids: HashSet<String> =
+            sessions.iter().filter_map(|(p, _, _)| p.file_stem().and_then(|s| s.to_str()).map(str::to_string)).collect();
+        self.refresh_hooks(&active_ids);
 
         self.cache.retain(|path, _| sessions.iter().any(|(p, _, _)| p == path));
 
-        let mut best: Option<(Activity, u64, String, String)> = None;
+        let mut best: Option<(Activity, u64, String, String, String)> = None;
         let mut busy_sessions: u8 = 0;
 
         for (path, len, mtime) in sessions {
             let fresh = self.cache.get(&path).map_or(true, |c| c.len != len || c.mtime != mtime);
             if fresh {
-                let (tail, project) = read_tail(&path).unwrap_or((Tail::Unknown, String::new()));
-                self.cache.insert(path.clone(), CachedTail { len, mtime, tail, project });
+                let (tail, project, last_turn) = read_tail(&path).unwrap_or((Tail::Unknown, String::new(), String::new()));
+                self.cache.insert(path.clone(), CachedTail { len, mtime, tail, project, last_turn });
             }
             let cached = &self.cache[&path];
 
@@ -130,45 +166,49 @@ impl ActivityMonitor {
             // A permission notification only counts for a tool call that is still unanswered and
             // was requested before the notification fired. Comparing against the file mtime is not
             // enough: Claude Code appends metadata lines and parallel tool results after the prompt.
-            let hook_says_permission = match (&cached.tail, hook.as_ref()) {
-                (Tail::PendingTool(_, since), Some(h)) => {
-                    h.is_permission && h.mtime >= *since && (h.session_id.is_empty() || h.session_id == session_id)
-                }
+            let hook = self.hooks.get(session_id);
+            let hook_says_permission = match (&cached.tail, hook) {
+                (Tail::PendingTool(_, since), Some(h)) => h.last_permission > 0 && h.last_permission >= *since,
                 _ => false,
             };
 
-            let (activity, tool) = resolve(&cached.tail, now, mtime, hook_says_permission, hook_installed);
+            let (activity, tool) = resolve(&cached.tail, now, mtime, hook_says_permission, hook.is_some());
             if activity >= Activity::Thinking {
                 busy_sessions = busy_sessions.saturating_add(1);
             }
 
             let project = project_name(&path, &cached.project);
-            let better = best.as_ref().map_or(true, |(a, m, _, _)| (activity, mtime) > (*a, *m));
+            let better = best.as_ref().map_or(true, |(a, m, _, _, _)| (activity, mtime) > (*a, *m));
             if better {
-                best = Some((activity, mtime, tool, project));
+                let last_turn = if activity == Activity::Idle { cached.last_turn.clone() } else { String::new() };
+                best = Some((activity, mtime, tool, project, last_turn));
             }
         }
 
         match best {
-            Some((activity, _, tool, project)) => ActivitySnapshot {
+            Some((activity, _, tool, project, last_turn)) => ActivitySnapshot {
                 activity,
                 tool: sanitize_label(&tool),
                 project: sanitize_label(&project),
                 busy_sessions,
+                last_turn: sanitize_label(&last_turn),
             },
             None => ActivitySnapshot::default(),
         }
     }
 }
 
-fn resolve(tail: &Tail, now: u64, mtime: u64, hook_says_permission: bool, hook_installed: bool) -> (Activity, String) {
+// `session_hooked`: the hook has reported for this session, so its silence means
+// a pending tool is running, not waiting. Other sessions (started before the hook
+// was installed, or where it does not fire) fall back to the time-based guess.
+fn resolve(tail: &Tail, now: u64, mtime: u64, hook_says_permission: bool, session_hooked: bool) -> (Activity, String) {
     let age = now.saturating_sub(mtime);
     match tail {
         Tail::PendingTool(name, since) => {
             // Parallel tool results keep touching the file, so measure from the request itself.
             let age = if *since > 0 { now.saturating_sub(*since) } else { age };
-            let guessed = !hook_installed && permission_guess_secs(name).map_or(false, |limit| age >= limit);
-            if hook_says_permission || guessed || waits_for_user(name) {
+            let guessed = !session_hooked && permission_guess_secs(name).map_or(false, |limit| age >= limit);
+            if (hook_says_permission || guessed || waits_for_user(name)) && age < WAITING_WINDOW_SECS {
                 (Activity::Permission, name.clone())
             } else if age < ACTIVE_WINDOW_SECS {
                 let activity = if is_write_tool(name) { Activity::Writing } else { Activity::Tool };
@@ -221,7 +261,7 @@ fn recent_transcripts(projects_dir: &Path, now: u64) -> Vec<(PathBuf, u64, u64)>
                 continue;
             }
             let mtime = meta.modified().ok().map(system_time_secs).unwrap_or(0);
-            if now.saturating_sub(mtime) <= ACTIVE_WINDOW_SECS {
+            if now.saturating_sub(mtime) <= WAITING_WINDOW_SECS {
                 out.push((path, meta.len(), mtime));
             }
         }
@@ -229,27 +269,36 @@ fn recent_transcripts(projects_dir: &Path, now: u64) -> Vec<(PathBuf, u64, u64)>
     out
 }
 
-fn read_tail(path: &Path) -> Option<(Tail, String)> {
+fn read_tail(path: &Path) -> Option<(Tail, String, String)> {
+    read_file_tail(path, TAIL_BYTES).map(|body| classify_lines(&body))
+}
+
+// Last `max_bytes` of a file as whole lines (a partial first line is dropped).
+fn read_file_tail(path: &Path, max_bytes: u64) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(TAIL_BYTES);
+    let start = len.saturating_sub(max_bytes);
     file.seek(SeekFrom::Start(start)).ok()?;
 
     let mut buf = Vec::with_capacity((len - start) as usize);
     file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
+    let text = String::from_utf8_lossy(&buf).into_owned();
 
-    // When reading from the middle of the file, the first line is partial.
-    let body = if start > 0 { text.split_once('\n').map_or("", |(_, rest)| rest) } else { &text };
-    Some(classify_lines(body))
+    if start > 0 {
+        return Some(text.split_once('\n').map_or(String::new(), |(_, rest)| rest.to_string()));
+    }
+    Some(text)
 }
 
 // Walks the current turn backwards. The newest entry decides the base state, but
 // Claude often calls several tools in parallel: a fast result can land after a
 // question that is still waiting. So every tool_use of the turn is matched
 // against the tool_results seen after it, and an unanswered call wins.
-fn classify_lines(body: &str) -> (Tail, String) {
+// Returns (tail, project cwd, last turn summary). The summary is Claude Code's own
+// end-of-turn line ("Cogitated for 54s") for the most recent finished turn.
+fn classify_lines(body: &str) -> (Tail, String, String) {
     let mut project = String::new();
+    let mut last_turn = String::new();
     let mut newest: Option<Tail> = None;
     let mut answered: HashSet<String> = HashSet::new();
     let mut pending: Option<(String, u64)> = None;
@@ -287,6 +336,12 @@ fn classify_lines(body: &str) -> (Tail, String) {
                     newest = classify_assistant(&obj);
                 }
             }
+            Some("system") if obj.get("subtype").and_then(Value::as_str) == Some("turn_duration") => {
+                // Written at the end of a turn, so the newest one belongs to the last finished turn.
+                if last_turn.is_empty() {
+                    last_turn = turn_summary(&obj).unwrap_or_default();
+                }
+            }
             Some("user") if obj.get("isMeta").and_then(Value::as_bool) != Some(true) => {
                 let result_ids = tool_result_ids(&obj);
                 let starts_turn = result_ids.is_empty();
@@ -309,7 +364,46 @@ fn classify_lines(body: &str) -> (Tail, String) {
         (Some(tail), None) => tail,
         (None, None) => Tail::Unknown,
     };
-    (tail, project)
+    (tail, project, last_turn)
+}
+
+// Claude Code's end-of-turn line. It picks the verb from a fixed list by hashing the
+// turn_duration entry's uuid (a 32-bit "h * 31 + c" string hash over UTF-16 code
+// units), so the result matches what the terminal showed for that turn.
+const TURN_VERBS: [&str; 8] = ["Baked", "Brewed", "Churned", "Cogitated", "Cooked", "Crunched", "Sautéed", "Worked"];
+
+fn turn_summary(obj: &Value) -> Option<String> {
+    let uuid = obj.get("uuid").and_then(Value::as_str)?;
+    let duration_ms = obj.get("durationMs").and_then(Value::as_u64)?;
+    let verb = TURN_VERBS[(string_hash(uuid) as u32 % TURN_VERBS.len() as u32) as usize];
+    Some(format!("{} for {}", verb, format_turn_duration(duration_ms)))
+}
+
+fn string_hash(s: &str) -> i32 {
+    s.encode_utf16().fold(0i32, |h, unit| h.wrapping_mul(31).wrapping_add(unit as i32))
+}
+
+// Same rules as Claude Code: whole seconds under a minute, otherwise rounded seconds
+// with carry into minutes, hours, and days.
+fn format_turn_duration(ms: u64) -> String {
+    if ms < 60_000 {
+        return format!("{}s", ms / 1000);
+    }
+    let (mut days, mut hours, mut minutes) = (ms / 86_400_000, ms % 86_400_000 / 3_600_000, ms % 3_600_000 / 60_000);
+    let mut seconds = ((ms % 60_000) as f64 / 1000.0).round() as u64;
+    if seconds == 60 { seconds = 0; minutes += 1; }
+    if minutes == 60 { minutes = 0; hours += 1; }
+    if hours == 24 { hours = 0; days += 1; }
+
+    if days > 0 {
+        format!("{}d {}h {}m", days, hours, minutes)
+    } else if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
 }
 
 fn tool_uses(obj: &Value) -> Vec<(&str, &str)> {
@@ -405,21 +499,46 @@ fn is_limit_error(obj: &Value) -> bool {
     text.contains("limit reached") || text.contains("hit your") && text.contains("limit")
 }
 
-fn read_hook_event(path: &Path) -> Option<HookEvent> {
-    let mtime = fs::metadata(path).ok()?.modified().ok().map(system_time_secs)?;
-    let raw = fs::read_to_string(path).ok()?;
-    // PowerShell's UTF-8 writer may prepend a BOM.
-    let obj: Value = serde_json::from_str(raw.trim_start_matches('\u{feff}').trim()).ok()?;
+// Parses "<epoch> <json>" lines written by the hook. Malformed lines are skipped.
+fn parse_hook_log(text: &str) -> Vec<HookEvent> {
+    text.lines()
+        .filter_map(|line| {
+            // PowerShell's UTF-8 writer may prepend a BOM.
+            let (epoch, json) = line.trim_start_matches('\u{feff}').trim().split_once(' ')?;
+            hook_event(json, epoch.parse().ok()?)
+        })
+        .collect()
+}
 
+// The previous hook overwrote a single file; its mtime is the event time.
+fn read_legacy_hook_event(path: &Path) -> Option<HookEvent> {
+    let at = fs::metadata(path).ok()?.modified().ok().map(system_time_secs)?;
+    let raw = fs::read_to_string(path).ok()?;
+    hook_event(raw.trim_start_matches('\u{feff}').trim(), at)
+}
+
+fn hook_event(json: &str, at: u64) -> Option<HookEvent> {
+    let obj: Value = serde_json::from_str(json).ok()?;
     let kind = obj.get("notification_type").and_then(Value::as_str).unwrap_or_default();
     let message = obj.get("message").and_then(Value::as_str).unwrap_or_default().to_lowercase();
-    let session_id = obj.get("session_id").and_then(Value::as_str).unwrap_or_default();
+
+    // Only accept characters a session ID may contain; the value is compared against file names.
+    let session_id: String = obj
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect();
+    if session_id.is_empty() {
+        return None;
+    }
 
     Some(HookEvent {
-        // Only accept characters a session ID may contain; the value is compared against file names.
-        session_id: session_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect(),
+        session_id,
         is_permission: kind == "permission_prompt" || (kind.is_empty() && message.contains("permission")),
-        mtime,
+        at,
     })
 }
 
@@ -463,21 +582,39 @@ pub fn set_hook_enabled(enable: bool) -> Result<bool, String> {
         Err(e) => return Err(format!("Cannot read Claude Code settings: {}", e)),
     };
 
-    apply_hook(&mut settings, enable, &hook_command(&config_dir.join(HOOK_FILE_NAME)))?;
+    apply_hook(&mut settings, enable, &hook_command(&config_dir.join(HOOK_LOG_NAME)))?;
     write_settings(&path, &settings)?;
 
-    let notify_file = config_dir.join(HOOK_FILE_NAME);
-    if enable {
-        // Seed a harmless event so exact detection takes over before the first real prompt.
-        if !notify_file.exists() {
-            let seed = serde_json::json!({ "hook_event_name": "Notification", "notification_type": "setup", "message": "Tinytosh hook installed" });
-            let _ = fs::write(&notify_file, seed.to_string());
-        }
-    } else {
-        // Without the hook, a stale file would keep the time-based guess disabled.
-        let _ = fs::remove_file(&notify_file);
+    if !enable {
+        let _ = fs::remove_file(config_dir.join(HOOK_LOG_NAME));
+        let _ = fs::remove_file(config_dir.join(LEGACY_HOOK_FILE_NAME));
     }
     Ok(enable)
+}
+
+// Rewrites an installed Tinytosh hook that still uses an older command (e.g. the
+// single-file version) to the current one. Leaves settings untouched otherwise.
+pub fn upgrade_hook_if_outdated() -> Result<bool, String> {
+    let config_dir = claude_config_dir();
+    let current = hook_command(&config_dir.join(HOOK_LOG_NAME));
+    let Ok(raw) = fs::read_to_string(config_dir.join(SETTINGS_FILE_NAME)) else { return Ok(false) };
+    let Ok(settings) = serde_json::from_str::<Value>(&raw) else { return Ok(false) };
+
+    let commands: Vec<&str> = settings
+        .pointer("/hooks/Notification")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .filter(|h| is_tinytosh_hook(h))
+        .filter_map(|h| h.get("command").and_then(Value::as_str))
+        .collect();
+
+    if commands.is_empty() || commands.iter().all(|c| *c == current) {
+        return Ok(false);
+    }
+    set_hook_enabled(true)
 }
 
 fn apply_hook(settings: &mut Value, enable: bool, command: &str) -> Result<(), String> {
@@ -509,20 +646,25 @@ fn apply_hook(settings: &mut Value, enable: bool, command: &str) -> Result<(), S
 }
 
 fn is_tinytosh_hook(hook: &Value) -> bool {
-    hook.get("command").and_then(Value::as_str).map_or(false, |c| c.contains(HOOK_FILE_NAME))
+    hook.get("command").and_then(Value::as_str).map_or(false, |c| c.contains(HOOK_MARKER))
 }
 
-// The hook receives the notification JSON on stdin; the command only writes it to a fixed file.
+// The hook receives the notification JSON on stdin; the command only appends it,
+// prefixed with the current epoch, as one line to a fixed file. A single write per
+// line keeps concurrent sessions from interleaving.
 #[cfg(not(target_os = "windows"))]
 fn hook_command(target: &Path) -> String {
     let quoted = target.to_string_lossy().replace('\'', "'\\''");
-    format!("cat > '{}'", quoted)
+    format!("line=\"$(date +%s) $(tr -d '\\n')\"; printf '%s\\n' \"$line\" >> '{}'", quoted)
 }
 
 #[cfg(target_os = "windows")]
 fn hook_command(target: &Path) -> String {
     let quoted = target.to_string_lossy().replace('\'', "''");
-    format!("powershell -NoProfile -Command \"$input | Out-File -Encoding utf8 -LiteralPath '{}'\"", quoted)
+    format!(
+        "powershell -NoProfile -Command \"$l = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString() + ' ' + (($input | Out-String) -replace '[\\r\\n]', ''); Add-Content -LiteralPath '{}' -Value $l -Encoding utf8\"",
+        quoted
+    )
 }
 
 fn write_settings(path: &Path, settings: &Value) -> Result<(), String> {
@@ -736,6 +878,7 @@ pub struct ClaudeStats {
     pub claude_7d: u8,
     pub claude_7d_reset: u32,
     pub claude_err: String,
+    pub claude_done: String,
 }
 
 pub fn build_stats(activity: &ActivitySnapshot, usage: &UsageState) -> ClaudeStats {
@@ -752,6 +895,7 @@ pub fn build_stats(activity: &ActivitySnapshot, usage: &UsageState) -> ClaudeSta
         claude_proj: activity.project.clone(),
         claude_sessions: activity.busy_sessions,
         claude_err: usage.error.as_ref().map(|e| e.code().to_string()).unwrap_or_default(),
+        claude_done: if state == Activity::Idle { activity.last_turn.clone() } else { String::new() },
         ..Default::default()
     };
 
@@ -1019,12 +1163,92 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn quotes_hook_path_for_the_shell() {
-        assert_eq!(hook_command(Path::new("/Users/o'neil/.claude/tinytosh-notify.json")), "cat > '/Users/o'\\''neil/.claude/tinytosh-notify.json'");
+        assert_eq!(
+            hook_command(Path::new("/Users/o'neil/.claude/tinytosh-notify.jsonl")),
+            "line=\"$(date +%s) $(tr -d '\\n')\"; printf '%s\\n' \"$line\" >> '/Users/o'\\''neil/.claude/tinytosh-notify.jsonl'"
+        );
+    }
+
+    // The generated command must really append one "<epoch> <json>" line per call.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn hook_command_appends_parseable_lines() {
+        let dir = std::env::temp_dir().join(format!("tinytosh-hook-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("tinytosh-notify.jsonl");
+        let _ = fs::remove_file(&log);
+
+        for payload in [r#"{"session_id":"s1","notification_type":"permission_prompt"}"#, "{\"session_id\":\"s2\",\n\"message\":\"x\"}"] {
+            let mut child = std::process::Command::new("sh")
+                .args(["-c", &hook_command(&log)])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+
+        let events = parse_hook_log(&fs::read_to_string(&log).unwrap());
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(events.len(), 2);
+        assert_eq!((events[0].session_id.as_str(), events[0].is_permission), ("s1", true));
+        assert_eq!((events[1].session_id.as_str(), events[1].is_permission), ("s2", false));
+        assert!(events[0].at > 1_700_000_000);
+    }
+
+    #[test]
+    fn matches_claude_code_turn_summary() {
+        // Same 32-bit hash as Java's String.hashCode, including overflow.
+        assert_eq!(string_hash("abc"), 96354);
+        assert_eq!(string_hash("polygenelubricants"), i32::MIN);
+        let verb = |uuid: &str| TURN_VERBS[(string_hash(uuid) as u32 % 8) as usize];
+        assert_eq!(verb("abc"), "Churned");
+        assert_eq!(verb("polygenelubricants"), "Baked", "negative hashes wrap like JavaScript's >>> 0");
+
+        for (ms, text) in [
+            (0, "0s"), (54_321, "54s"), (59_999, "59s"), (83_000, "1m 23s"), (119_600, "2m 0s"),
+            (3_723_000, "1h 2m 3s"), (3_599_600, "1h 0m 0s"), (90_061_000, "1d 1h 1m"),
+        ] {
+            assert_eq!(format_turn_duration(ms), text, "{} ms", ms);
+        }
+
+        let line = r#"{"type":"system","subtype":"turn_duration","uuid":"abc","durationMs":54000}"#;
+        let (_, _, summary) = classify_lines(&[PROMPT, DONE, line].join("\n"));
+        assert_eq!(summary, "Churned for 54s");
+        // A newer prompt starts a new turn, so the old summary no longer applies.
+        let (_, _, summary) = classify_lines(&[line, PROMPT].join("\n"));
+        assert_eq!(summary, "");
+    }
+
+    #[test]
+    fn parses_hook_log() {
+        let log = concat!(
+            "1790000000 {\"session_id\":\"abc-1\",\"notification_type\":\"permission_prompt\"}\n",
+            "garbage line\n",
+            "\u{feff}1790000050 {\"session_id\":\"abc-1\",\"notification_type\":\"idle_prompt\"}\n",
+            "1790000060 {\"notification_type\":\"setup\"}\n",
+            "1790000070 {\"session_id\":\"../../evil\",\"message\":\"Claude needs your permission\"}\n",
+        );
+        let events = parse_hook_log(log);
+        assert_eq!(events.len(), 3, "malformed and session-less lines are skipped");
+        assert_eq!(events[0], HookEvent { session_id: "abc-1".into(), is_permission: true, at: 1790000000 });
+        assert!(!events[1].is_permission);
+        assert_eq!(events[2].session_id, "evil", "path characters are stripped from session ids");
+        assert!(events[2].is_permission);
+    }
+
+    #[test]
+    fn waiting_states_expire_after_the_waiting_window() {
+        const T0: u64 = 1_000_000;
+        let ask = Tail::PendingTool("AskUserQuestion".into(), T0);
+        assert_eq!(resolve(&ask, T0 + 900, T0, false, true).0, Activity::Permission, "still waiting after 15 min");
+        assert_eq!(resolve(&ask, T0 + WAITING_WINDOW_SECS, T0, false, true).0, Activity::Idle);
     }
 
     #[test]
     fn sanitizes_labels() {
-        assert_eq!(sanitize_label("Café\u{0007} project with a very long name"), "Cafe project with a");
+        assert_eq!(sanitize_label("Café\u{0007} project with a very long name"), "Cafe project with a very");
         assert_eq!(path_basename("C:\\Users\\me\\repo\\"), "repo");
         let transcript = Path::new("/x/projects/-Users-me-my-app/abc.jsonl");
         assert_eq!(project_name(transcript, "/Users/me/my-app/src/lib"), "my-app");

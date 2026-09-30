@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod claude;
+mod playback;
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::Mutex; 
 use std::env; 
 use std::collections::HashMap;
@@ -19,7 +20,7 @@ use any_ascii::any_ascii;
 #[cfg(not(target_os = "macos"))]
 use futures::StreamExt;
 #[cfg(not(target_os = "macos"))]
-use nowhear::{MediaEvent, MediaSourceBuilder, MediaSource};
+use nowhear::{MediaEvent, MediaSourceBuilder, MediaSource, PlayerInfo};
 
 // Main Loop
 const LOOP_INTERVAL_MS: u64 = 1000;          // Base speed of the main background loop
@@ -86,6 +87,7 @@ struct AppState {
     media_info: Mutex<MediaStats>,
     device_logs: Mutex<Vec<String>>,
     log_reading_enabled: Mutex<bool>,
+    media_clock: Mutex<playback::PlaybackClock>,
     claude_activity: Mutex<claude::ActivitySnapshot>,
     claude_usage: Mutex<claude::UsageState>,
 }
@@ -96,6 +98,8 @@ struct MediaStats {
     media_name: String,
     media_author: String,
     media_album: String,
+    media_pos: u32, // Seconds into the track; 0 with media_len 0 when unknown
+    media_len: u32,
 }
 
 #[derive(serde::Serialize)]
@@ -314,6 +318,45 @@ async fn set_device_brightness(state: tauri::State<'_, AppState>, value: u8, per
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+fn set_media_from_player(state: &AppState, info: PlayerInfo, status: &str) {
+    let position = info.position.map(|p| p.as_secs_f64());
+    let mut m = state.media_info.lock().unwrap();
+    m.media_status = status.to_string();
+    if let Some(track) = info.current_track {
+        let duration = track.duration.map(|d| d.as_secs_f64());
+        state.media_clock.lock().unwrap().sync(&track.title, position, duration, status == "playing", Instant::now());
+        m.media_name = any_ascii(&track.title);
+        m.media_author = any_ascii(&track.artist.join(", "));
+        m.media_album = any_ascii(&track.album.unwrap_or_default());
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_media(state: &AppState) {
+    let mut m = state.media_info.lock().unwrap();
+    m.media_status = "stopped".to_string();
+    m.media_name = String::new();
+    m.media_author = String::new();
+    m.media_album = String::new();
+    state.media_clock.lock().unwrap().reset();
+}
+
+// "Start on Boot" stores the executable path of whichever build enabled it. If a
+// development build did, every login starts that stale binary instead of the
+// installed app. An installed app bundle re-registers itself on launch; builds
+// running outside a bundle (cargo run, target/debug) never touch the login item.
+fn repair_autostart(app: &tauri::AppHandle) {
+    let Ok(exe) = env::current_exe() else { return };
+    if !exe.to_string_lossy().contains(".app/Contents/MacOS/") {
+        return;
+    }
+    let manager = app.autolaunch();
+    if manager.is_enabled().unwrap_or(false) {
+        let _ = manager.enable();
+    }
+}
+
 fn show_window_safely(app_handle: &tauri::AppHandle, window: tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -340,6 +383,7 @@ fn main() {
         media_info: Mutex::new(MediaStats::default()),
         device_logs: Mutex::new(Vec::new()),
         log_reading_enabled: Mutex::new(false),
+        media_clock: Mutex::new(playback::PlaybackClock::default()),
         claude_activity: Mutex::new(claude::ActivitySnapshot::default()),
         claude_usage: Mutex::new(claude::UsageState::default()),
     };
@@ -365,6 +409,10 @@ fn main() {
         .setup(move |app| {
             let args: Vec<String> = env::args().collect();
             let is_minimized = args.contains(&"--minimized".to_string());
+
+            repair_autostart(app.handle());
+            // Older installs wrote a single notification file; move them to the per-session log.
+            thread::spawn(|| { let _ = claude::upgrade_hook_if_outdated(); });
 
             #[cfg(target_os = "macos")]
             if is_minimized {
@@ -429,14 +477,7 @@ fn main() {
                                     let status = format!("{:?}", info.playback_state).to_lowercase();
                                     if status == "playing" || status == "paused" {
                                         current_player = Some(player_name.clone());
-                                        let state = app_handle_media.state::<AppState>();
-                                        let mut m = state.media_info.lock().unwrap();
-                                        m.media_status = status.clone();
-                                        if let Some(track) = info.current_track {
-                                            m.media_name = any_ascii(&track.title);
-                                            m.media_author = any_ascii(&track.artist.join(", "));
-                                            m.media_album = any_ascii(&track.album.unwrap_or_default());
-                                        }
+                                        set_media_from_player(&app_handle_media.state::<AppState>(), info, &status);
                                         if status == "playing" { break; }
                                     }
                                 }
@@ -445,9 +486,13 @@ fn main() {
 
                         if let Ok(mut stream) = source.event_stream().await {
                             while let Some(event) = stream.next().await {
-                                if matches!(event, MediaEvent::PositionChanged { .. }) { continue; }
-
                                 match event {
+                                    MediaEvent::PositionChanged { player_name, position } => {
+                                        if current_player.as_ref() == Some(&player_name) {
+                                            app_handle_media.state::<AppState>().media_clock.lock().unwrap().seek(position.as_secs_f64(), Instant::now());
+                                        }
+                                        continue;
+                                    },
                                     MediaEvent::TrackChanged { player_name, .. } | MediaEvent::StateChanged { player_name, .. } => {
                                         if let Ok(info) = source.get_player(&player_name).await {
                                             let status = format!("{:?}", info.playback_state).to_lowercase();
@@ -457,12 +502,7 @@ fn main() {
                                             if status == "stopped" || (!has_title && current_player.as_ref() == Some(&player_name)) {
                                                 if current_player.as_ref() == Some(&player_name) {
                                                     current_player = None;
-                                                    let state = app_handle_media.state::<AppState>();
-                                                    let mut m = state.media_info.lock().unwrap();
-                                                    m.media_status = "stopped".to_string();
-                                                    m.media_name = String::new();
-                                                    m.media_author = String::new();
-                                                    m.media_album = String::new();
+                                                    clear_media(&app_handle_media.state::<AppState>());
                                                 }
                                             } else if has_title {
                                                 let is_stealing_focus = status == "playing";
@@ -470,14 +510,7 @@ fn main() {
 
                                                 if is_stealing_focus || is_current {
                                                     current_player = Some(player_name.clone());
-                                                    let state = app_handle_media.state::<AppState>();
-                                                    let mut m = state.media_info.lock().unwrap();
-                                                    m.media_status = status.clone();
-                                                    if let Some(track) = info.current_track {
-                                                        m.media_name = any_ascii(&track.title);
-                                                        m.media_author = any_ascii(&track.artist.join(", "));
-                                                        m.media_album = any_ascii(&track.album.unwrap_or_default());
-                                                    }
+                                                    set_media_from_player(&app_handle_media.state::<AppState>(), info, &status);
                                                 }
                                             }
                                         }
@@ -485,12 +518,7 @@ fn main() {
                                     MediaEvent::PlayerRemoved { player_name } => {
                                         if current_player.as_ref() == Some(&player_name) {
                                             current_player = None;
-                                            let state = app_handle_media.state::<AppState>();
-                                            let mut m = state.media_info.lock().unwrap();
-                                            m.media_status = "stopped".to_string();
-                                            m.media_name = String::new();
-                                            m.media_author = String::new();
-                                            m.media_album = String::new();
+                                            clear_media(&app_handle_media.state::<AppState>());
                                         }
                                     },
                                     _ => {}
@@ -506,14 +534,7 @@ fn main() {
                                                 
                                                 if has_title && (status == "playing" || status == "paused") {
                                                     current_player = Some(p_name.clone());
-                                                    let state = app_handle_media.state::<AppState>();
-                                                    let mut m = state.media_info.lock().unwrap();
-                                                    m.media_status = status;
-                                                    if let Some(track) = info.current_track {
-                                                        m.media_name = any_ascii(&track.title);
-                                                        m.media_author = any_ascii(&track.artist.join(", "));
-                                                        m.media_album = any_ascii(&track.album.unwrap_or_default());
-                                                    }
+                                                    set_media_from_player(&app_handle_media.state::<AppState>(), info, &status);
                                                     break;
                                                 }
                                             }
@@ -543,7 +564,9 @@ fn main() {
                             m.media_name = String::new();
                             m.media_author = String::new();
                             m.media_album = String::new();
+                            state.media_clock.lock().unwrap().reset();
                         } else {
+                            state.media_clock.lock().unwrap().sync(&title, info.elapsed_time, info.duration, info.playing, Instant::now());
                             m.media_status = if info.playing { "playing".to_string() } else { "paused".to_string() };
                             m.media_name = any_ascii(&title);
                             m.media_author = any_ascii(&info.artist.unwrap_or_default());
@@ -554,6 +577,7 @@ fn main() {
                         m.media_name = String::new();
                         m.media_author = String::new();
                         m.media_album = String::new();
+                        state.media_clock.lock().unwrap().reset();
                     }
                     
                     drop(m);
@@ -658,7 +682,12 @@ fn main() {
                     let total_rx_bytes: u64 = networks.iter().map(|(_, n)| n.received()).sum();
                     let download_kb = total_rx_bytes / 1024; 
 
-                    let media_data = state.media_info.lock().unwrap().clone();
+                    let mut media_data = state.media_info.lock().unwrap().clone();
+                    (media_data.media_pos, media_data.media_len) = if media_data.media_status == "stopped" {
+                        (0, 0)
+                    } else {
+                        state.media_clock.lock().unwrap().snapshot(Instant::now())
+                    };
                     let claude_data = claude::build_stats(
                         &state.claude_activity.lock().unwrap(),
                         &state.claude_usage.lock().unwrap(),
