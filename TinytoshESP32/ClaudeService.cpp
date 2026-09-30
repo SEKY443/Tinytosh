@@ -8,6 +8,7 @@ void ClaudeService::applyTelemetry(const JsonDocument& doc, ClaudeData& data) {
     data.state = isKnownState(state) ? state : "idle";
     data.tool = sanitizeLabel(doc["claude_tool"] | "");
     data.project = sanitizeLabel(doc["claude_proj"] | "");
+    data.last_turn = sanitizeLabel(doc["claude_done"] | "");
     data.busy_sessions = constrain((int)(doc["claude_sessions"] | 0), 0, 99);
 
     data.usage_ok = doc["claude_ok"] | false;

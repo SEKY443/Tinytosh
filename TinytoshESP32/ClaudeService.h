@@ -16,7 +16,7 @@ public:
     static String formatDuration(int minutes);
 
 private:
-    static const int MAX_LABEL_LEN = 20;
+    static const int MAX_LABEL_LEN = 24;
 
     static bool isKnownState(const String& state);
     static String sanitizeLabel(const char* raw);

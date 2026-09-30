@@ -267,6 +267,8 @@ struct CurrencyData {
   bool updated = false;
 };
 
+const int CPU_HISTORY_LEN = 128;  // One sample per second, one pixel per sample
+
 struct PcStats {
   float cpu_percent;
   float mem_percent;
@@ -274,6 +276,12 @@ struct PcStats {
   float net_down_kb;
   unsigned long last_update = 0;
   bool is_wifi = false;
+
+  // CPU history ring buffer for the graph (percent, oldest overwritten first)
+  uint8_t cpu_history[CPU_HISTORY_LEN] = {0};
+  int history_head = 0;    // Next slot to write
+  int history_count = 0;
+  unsigned long last_sample = 0;
 };
 
 struct PcMedia {
@@ -281,6 +289,9 @@ struct PcMedia {
   String name;
   String author;
   String album;
+  unsigned long position_sec = 0;   // As reported by the PC at position_at
+  unsigned long duration_sec = 0;   // 0 when the track length is unknown
+  unsigned long position_at = 0;    // millis() when position_sec was received
   unsigned long last_update = 0;
 };
 
@@ -303,6 +314,7 @@ struct ClaudeData {
   String state = "";           // Empty when no bridge is sending Claude data
   String tool = "";
   String project = "";
+  String last_turn = "";       // Claude Code's end-of-turn line, e.g. "Cogitated for 54s"
   int busy_sessions = 0;
   bool usage_ok = false;
   int five_hour_pct = 0;

@@ -6,6 +6,7 @@
 
 #include "ClaudeService.h"
 #include "images.h"
+#include "PcMonitorService.h"
 #include "PopulationService.h"
 #include "TimeService.h"
 #include "WeatherService.h"
@@ -988,11 +989,11 @@ void DisplayService::drawStockScreen(const Config& config, const StockData& data
 }
 
 void DisplayService::drawPcScreen(const PcStats& pcStats) {
-    bool isInvalid = (isnan(pcStats.cpu_percent) || pcStats.cpu_percent == 0) && (isnan(pcStats.mem_percent) || pcStats.mem_percent == 0); 
+    bool isInvalid = (isnan(pcStats.cpu_percent) || pcStats.cpu_percent == 0) && (isnan(pcStats.mem_percent) || pcStats.mem_percent == 0);
 
     if (isInvalid) {
-        drawInfoScreen(icon_monitor, "No PC"); 
-        return; 
+        drawInfoScreen(nullptr, "No PC");
+        return;
     }
 
     display.clearDisplay();
@@ -1000,67 +1001,63 @@ void DisplayService::drawPcScreen(const PcStats& pcStats) {
     display.setTextColor(SSD1306_WHITE);
     display.setTextWrap(false);
     display.setTextSize(1);
-    display.setFont(); 
+    display.setFont();
 
-    const int BAR_X = 20;
-    const int BAR_W = 86;
-    const int BAR_H = 6;
-    
-    const int FILL_X_OFFSET = 2;       
-    const int FILL_Y_OFFSET = 2;       
-    const int MAX_FILL_W = BAR_W - 4;
-    const int FILL_H = 2;
-    const int TEXT_X = 110;
+    // Text label + infilled bar + right-aligned value, one row per metric
+    const int BAR_X = 22;
+    const int BAR_W = 76;
+    const int BAR_H = 7;
 
-    auto drawInfilledBar = [&](int y, float percent) {
-        display.drawRect(BAR_X, y, BAR_W, BAR_H, 1);
-        int fillW = (int)((constrain(percent, 0, 100) / 100.0) * MAX_FILL_W);
-        if (fillW > 0) {
-            display.fillRect(BAR_X + FILL_X_OFFSET, y + FILL_Y_OFFSET, fillW, FILL_H, 1);
-        }
+    auto drawRow = [&](int y, const char* label, float percent, const String& value) {
+        display.setCursor(0, y);
+        display.print(label);
+
+        display.drawRect(BAR_X, y, BAR_W, BAR_H, SSD1306_WHITE);
+        int fillW = (int)((constrain(percent, 0, 100) / 100.0) * (BAR_W - 4));
+        if (fillW > 0) display.fillRect(BAR_X + 2, y + 2, fillW, BAR_H - 4, SSD1306_WHITE);
+
+        display.setCursor(128 - value.length() * 6, y);
+        display.print(value);
     };
 
-    // 1. CPU
-    display.drawBitmap(0, 0, icon_cpu_percent, 16, 16, 1);
-    drawInfilledBar(5, pcStats.cpu_percent);
-    display.setCursor(TEXT_X, 4);
-    display.print(String((int)round(pcStats.cpu_percent)) + "%");
+    // 1. CPU: label and current value on top, history curve below (newest on the right)
+    String cpuValue = String((int)round(pcStats.cpu_percent)) + "%";
+    display.setCursor(0, 0);
+    display.print("CPU");
+    display.setCursor(128 - cpuValue.length() * 6, 0);
+    display.print(cpuValue);
 
-    // 2. RAM
-    display.drawBitmap(0, 16, icon_ram_percent, 16, 16, 1);
-    drawInfilledBar(21, pcStats.mem_percent);
-    display.setCursor(TEXT_X, 20);
-    display.print(String((int)round(pcStats.mem_percent)) + "%");
+    const int GRAPH_TOP = 10;
+    const int GRAPH_BOTTOM = 36;
+    for (int x = 0; x < 128; x += 2) display.drawPixel(x, GRAPH_BOTTOM + 1, SSD1306_WHITE);
 
-    // 3. Disk
-    display.drawBitmap(0, 32, icon_disk_percent, 16, 16, 1);
-    drawInfilledBar(37, pcStats.disk_percent);
-    display.setCursor(TEXT_X, 36);
-    display.print(String((int)round(pcStats.disk_percent)) + "%");
-
-    // 4. Download
-    display.drawBitmap(0, 48, icon_net_down, 16, 16, 1); 
-    
-    float netPercent = (pcStats.net_down_kb / 5120.0) * 100.0;
-    drawInfilledBar(53, netPercent);
-    
-    display.setCursor(TEXT_X, 52);
-    
-    if (pcStats.net_down_kb >= 1024) {
-        display.print(String((int)round(pcStats.net_down_kb / 1024.0)) + "M");
-    } else if (pcStats.net_down_kb >= 100) {
-        display.print("<1M");
-    } else {
-        display.print(String((int)pcStats.net_down_kb) + "K");
+    int prevX = -1, prevY = -1;
+    for (int i = 0; i < pcStats.history_count; i++) {
+        int idx = (pcStats.history_head - pcStats.history_count + i + CPU_HISTORY_LEN) % CPU_HISTORY_LEN;
+        int x = 127 - (pcStats.history_count - 1 - i);
+        int y = GRAPH_BOTTOM - (pcStats.cpu_history[idx] * (GRAPH_BOTTOM - GRAPH_TOP)) / 100;
+        if (prevX < 0) display.drawPixel(x, y, SSD1306_WHITE);
+        else display.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+        prevX = x;
+        prevY = y;
     }
+
+    // 2. RAM and download bars, packed below the graph
+    String netValue;
+    if (pcStats.net_down_kb >= 1024) netValue = String((int)round(pcStats.net_down_kb / 1024.0)) + "M";
+    else if (pcStats.net_down_kb >= 100) netValue = "<1M";
+    else netValue = String((int)pcStats.net_down_kb) + "K";
+
+    drawRow(43, "RAM", pcStats.mem_percent, String((int)round(pcStats.mem_percent)) + "%");
+    drawRow(55, "NET", (pcStats.net_down_kb / 5120.0) * 100.0, netValue);
 }
 
 void DisplayService::drawMediaScreen(const PcMedia& media) {
     bool isInvalid = (media.status.length() == 0 || media.name.length() == 0 || media.author.length() == 0 || media.name.equalsIgnoreCase("Unknown"));
 
     if (isInvalid) {
-        drawInfoScreen(icon_note, "No Media"); 
-        return; 
+        drawInfoScreen(nullptr, "No Media");
+        return;
     }
 
     display.clearDisplay();
@@ -1068,57 +1065,42 @@ void DisplayService::drawMediaScreen(const PcMedia& media) {
     display.setTextColor(SSD1306_WHITE);
     display.setTextWrap(false);
     display.setTextSize(1);
-    display.setFont(); 
+    display.setFont();
 
-    display.drawBitmap(2, 4, icon_note, 32, 32, 1);
-
-    display.setFont(&Picopixel);
-    String statusStr = media.status;
-    statusStr.toUpperCase();
-    if (statusStr == "") statusStr = "STOPPED";
-    
     int16_t x1, y1; uint16_t w, h;
-    display.getTextBounds(statusStr.c_str(), 0, 0, &x1, &y1, &w, &h);
-    display.setCursor(18 - (w / 2), 46);
-    display.print(statusStr);
-
-    const unsigned char* iconBits = icon_stop;
-    if (statusStr == "PLAYING") iconBits = icon_play;
-    if (statusStr == "PAUSED")  iconBits = icon_pause;
-    display.drawBitmap(14, 52, iconBits, 8, 8, 1);
 
     auto drawSmartText = [&](String text, int x, int &y, const GFXfont* font, bool isPicopixel, int maxLines) {
         if (text == "") return;
         display.setFont(font);
-        
-        String lines[8] = {"", "", "", "", "", "", "", ""}; 
+
+        String lines[8] = {"", "", "", "", "", "", "", ""};
         int lineCount = 0;
         int start = 0;
-        int maxWidth = 82; 
-        
+        int maxWidth = 128 - x;
+
         while (start < text.length()) {
             int spaceIdx = text.indexOf(' ', start);
             if (spaceIdx == -1) spaceIdx = text.length();
             String word = text.substring(start, spaceIdx);
-            
+
             String testLine = lines[lineCount].length() == 0 ? word : lines[lineCount] + " " + word;
             display.getTextBounds(testLine.c_str(), 0, 0, &x1, &y1, &w, &h);
-            
+
             if (w > maxWidth) {
                 if (lines[lineCount].length() == 0) {
-                    lines[lineCount++] = word; 
+                    lines[lineCount++] = word;
                 } else {
                     lineCount++;
                     if (lineCount < maxLines) lines[lineCount] = word;
                 }
-                if (lineCount == maxLines) break; 
+                if (lineCount == maxLines) break;
             } else {
                 lines[lineCount] = testLine;
             }
             start = spaceIdx + 1;
         }
         if (lineCount < maxLines && lines[lineCount].length() > 0) lineCount++;
-        
+
         if (start < text.length() && lineCount == maxLines) {
             String& lastLine = lines[maxLines - 1];
             while (lastLine.length() > 0) {
@@ -1130,23 +1112,25 @@ void DisplayService::drawMediaScreen(const PcMedia& media) {
             }
             lastLine += "...";
         }
-        
+
         for (int i = 0; i < lineCount; i++) {
             if (isPicopixel) {
-                y += 5; 
+                y += 5;
                 display.setCursor(x, y);
                 display.print(lines[i]);
-                y += 1; 
+                y += 1;
             } else {
                 display.setCursor(x, y);
                 display.print(lines[i]);
                 y += 8 + 1;
             }
         }
-        y += 6;
+        y += 3;
     };
 
-    int cursorY = 4;
+    // Text block (track, artist, album) above the progress row
+    const int TEXT_BOTTOM = 42;
+    int cursorY = 1;
 
     String trackName = media.name;
     trackName.toUpperCase();
@@ -1155,22 +1139,50 @@ void DisplayService::drawMediaScreen(const PcMedia& media) {
     albumName.toUpperCase();
     bool hasAlbum = (albumName.length() > 0 && albumName != "UNKNOWN");
 
-    int reservedForAuthor = 15;
-    int reservedForAlbum = hasAlbum ? 12 : 0;
+    int reservedForAuthor = 12;
+    int reservedForAlbum = hasAlbum ? 9 : 0;
+    int maxTrackLines = constrain((TEXT_BOTTOM - cursorY - reservedForAuthor - reservedForAlbum) / 9, 1, 2);
+    drawSmartText(trackName, 0, cursorY, nullptr, false, maxTrackLines);
 
-    int trackAvailY = 64 - cursorY - reservedForAuthor - reservedForAlbum;
-    int maxTrackLines = max(1, trackAvailY / 9);
-    drawSmartText(trackName, 44, cursorY, nullptr, false, maxTrackLines);
+    int maxAuthorLines = max(1, (TEXT_BOTTOM - cursorY - reservedForAlbum) / 9);
+    drawSmartText(media.author, 0, cursorY, nullptr, false, min(maxAuthorLines, 1));
 
-    int authorAvailY = 64 - cursorY - reservedForAlbum;
-    int maxAuthorLines = max(1, authorAvailY / 9);
-    drawSmartText(media.author, 44, cursorY, nullptr, false, maxAuthorLines);
-
-    if (hasAlbum) {
-        int albumAvailY = 64 - cursorY;
-        int maxAlbumLines = max(1, albumAvailY / 6);
-        drawSmartText(albumName, 44, cursorY, &Picopixel, true, maxAlbumLines);
+    if (hasAlbum && cursorY + 6 <= TEXT_BOTTOM) {
+        drawSmartText(albumName, 0, cursorY, &Picopixel, true, 1);
     }
+    display.setFont();
+
+    // Progress bar (same infilled style as the PC Monitor bars), only when the length is known
+    unsigned long position = PcMonitorService::currentPosition(media);
+    if (media.duration_sec > 0) {
+        const int BAR_Y = 45;
+        const int BAR_H = 6;
+        display.drawRect(0, BAR_Y, 128, BAR_H, SSD1306_WHITE);
+        int fillW = (int)((position * (128UL - 4)) / media.duration_sec);
+        if (fillW > 0) display.fillRect(2, BAR_Y + 2, fillW, BAR_H - 4, SSD1306_WHITE);
+    }
+
+    // Bottom row: status left, elapsed / total right
+    String statusStr = media.status;
+    statusStr.toUpperCase();
+    display.setCursor(0, 55);
+    display.print(statusStr);
+
+    if (media.duration_sec > 0) {
+        String timeStr = formatClock(position);
+        if (media.duration_sec < 3600) timeStr += "/" + formatClock(media.duration_sec);  // Keep hour-long tracks on one row
+        display.setCursor(128 - timeStr.length() * 6, 55);
+        display.print(timeStr);
+    }
+}
+
+// m:ss, or h:mm:ss from one hour on.
+String DisplayService::formatClock(unsigned long seconds) {
+    char buf[12];
+    unsigned long h = seconds / 3600, m = (seconds / 60) % 60, s = seconds % 60;
+    if (h > 0) snprintf(buf, sizeof(buf), "%lu:%02lu:%02lu", h, m, s);
+    else snprintf(buf, sizeof(buf), "%lu:%02lu", m, s);
+    return String(buf);
 }
 
 void DisplayService::drawBambuScreen(const BambuData& data) {
@@ -1336,35 +1348,43 @@ void DisplayService::drawClaudeScreen(const ClaudeData& claude) {
     display.setTextSize(1);
     display.setFont();
 
-    // 1. Status header (inverted)
-    String status = "IDLE";
-    if (claude.state == "offline")       status = "NO SESSION";
-    else if (claude.state == "thinking") status = "THINKING";
-    else if (claude.state == "writing")  status = "WRITING CODE";
-    else if (claude.state == "tool")     status = "RUNNING";
-    else if (claude.state == "limit")    status = "OUT OF QUOTA";
+    // 1. Session line: project name, status square on the far right
+    bool working = claude.state == "thinking" || claude.state == "tool" || claude.state == "writing";
+    bool limited = claude.state == "limit";
 
-    display.fillRect(0, 0, 128, 11, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-    display.setCursor(2, 2);
-    display.print(status);
+    const int SQUARE = 6;
+    const int SQUARE_X = 127 - SQUARE;
+    const int SQUARE_Y = 2;
+    // Working blinks like a camcorder REC light (1 s on, 1 s off); out of quota stays lit; idle shows nothing.
+    bool squareOn = limited || (working && (millis() / 1000) % 2 == 0);
+    if (squareOn) display.fillRect(SQUARE_X, SQUARE_Y, SQUARE, SQUARE, SSD1306_WHITE);
+
+    int nameMaxChars = 19;
     if (claude.busy_sessions > 1) {
         String count = "x" + String(claude.busy_sessions);
-        display.setCursor(126 - count.length() * 6, 2);
+        display.setCursor(SQUARE_X - 3 - count.length() * 6, 1);
         display.print(count);
+        nameMaxChars -= count.length() + 1;
     }
-    display.setTextColor(SSD1306_WHITE);
 
-    // 2. Context line: project / tool, or when the quota comes back
-    String context = claude.project;
-    if (claude.state == "limit") {
+    String session = claude.state == "offline" ? String("No session") : claude.project;
+    display.setCursor(0, 1);
+    display.print(fitText(session, nameMaxChars));
+
+    // 2. Detail line: the running tool, or when the quota comes back
+    String detail = "";
+    if (limited) {
         int resetMin = claude.weekly_pct >= 100 ? claude.weekly_reset_min : claude.five_hour_reset_min;
-        context = claude.usage_ok ? "BACK IN " + ClaudeService::formatDuration(resetMin) : "";
+        detail = claude.usage_ok ? "Limit, back in " + ClaudeService::formatDuration(resetMin) : "Out of quota";
     } else if ((claude.state == "tool" || claude.state == "writing") && claude.tool.length() > 0) {
-        context = context.length() > 0 ? context + " / " + claude.tool : claude.tool;
+        detail = claude.tool;
+    } else if (claude.state == "thinking") {
+        detail = "Thinking...";
+    } else if (claude.state == "idle") {
+        detail = claude.last_turn.length() > 0 ? claude.last_turn : String("Done");
     }
-    display.setCursor(0, 14);
-    display.print(fitText(context, 21));
+    display.setCursor(0, 13);
+    display.print(fitText(detail, 21));
 
     display.drawFastHLine(0, 24, 128, SSD1306_WHITE);
 
@@ -1499,8 +1519,9 @@ bool DisplayService::isScreenEnabled(const AppState& state, int screenIndex) {
         case SCREEN_PC_MEDIA: {
             if (!config.show_media) return false;
             if (config.hide_empty_media) {
-                bool isInvalid = (state.media.status.length() == 0 || state.media.name.length() == 0 || state.media.author.length() == 0 || state.media.name.equalsIgnoreCase("Unknown"));
-                if (isInvalid) return false;
+                // Only a track that is actually playing keeps the screen in rotation (paused does not).
+                bool hasTrack = state.media.name.length() > 0 && !state.media.name.equalsIgnoreCase("Unknown");
+                if (!hasTrack || !state.media.status.equalsIgnoreCase("playing")) return false;
             }
             return true;
         }

@@ -83,6 +83,7 @@ private:
     const unsigned char* getAQIBitmap(int val, bool is_eu);
 
     void drawClaudeAlert(const ClaudeData& claude);
+    static String formatClock(unsigned long seconds);
     void drawUsageRow(int y, const char* label, int percent, int resetMinutes);
     static String fitText(String text, int maxChars);
 };

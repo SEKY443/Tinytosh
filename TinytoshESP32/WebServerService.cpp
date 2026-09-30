@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include "ClaudeService.h"
+#include "PcMonitorService.h"
 
 #include "JsonSerializer.h"
 #include "TimeService.h"
@@ -618,8 +619,8 @@ void WebServerService::handleRoot() {
               add("<div class='tile'><div class='tile-icon'>👤</div><div class='tile-value' id='web-media-author' style='font-size:1.2rem'>" + media.author + "</div><div class='tile-label'>Author</div></div>");
               add("<div class='tile'><div class='tile-icon'>💿</div><div class='tile-value' id='web-media-album' style='font-size:1.2rem'>" + media.album + "</div><div class='tile-label'>Album</div></div>");
               add("</div></div>");
-              add("<label class='checkbox-label'><input type='checkbox' name='hide_empty_media' value='1' " + String(config.hide_empty_media ? "checked" : "") + "> Hide empty screen</label>");
-              add("<p class='help-text mt-0'>Screen is excluded from rotation when there is no data.</p>");
+              add("<label class='checkbox-label'><input type='checkbox' name='hide_empty_media' value='1' " + String(config.hide_empty_media ? "checked" : "") + "> Hide when not playing</label>");
+              add("<p class='help-text mt-0'>Screen is excluded from rotation unless a track is playing (paused counts as not playing).</p>");
               add("</div></div>");
               break;
           }
@@ -1267,10 +1268,7 @@ void WebServerService::handlePcStats() {
     state->pc.last_update = millis();
     state->pc.is_wifi = true;
 
-    state->media.status = doc["media_status"] | "stopped";
-    state->media.name = doc["media_name"] | "";
-    state->media.author = doc["media_author"] | "";
-    state->media.album = doc["media_album"] | "";
+    PcMonitorService::applyMediaTelemetry(doc, state->media);
     state->media.last_update = millis();
 
     ClaudeService::applyTelemetry(doc, state->claude);
