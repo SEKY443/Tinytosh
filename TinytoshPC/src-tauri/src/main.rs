@@ -27,7 +27,11 @@ const LOOP_INTERVAL_MS: u64 = 1000;          // Base speed of the main backgroun
 
 // Wi-Fi Telemetry & Connection
 const WIFI_THROTTLE_TICKS: i32 = 3;         // 3 ticks * 1000ms = 3 seconds. Prevents overloading the ESP32's sync web server
-const MAX_WIFI_FAILURES: i32 = 5;           // Consecutive failed HTTP requests before dropping connection and rescanning
+const MAX_WIFI_FAILURES: i32 = 5;
+// After a "paired to another PC" (403) reply, wait longer than the device's 10 s pairing
+// timeout before asking again. The device stays in the candidate list so a PC that was
+// just restarted (still holding the old pairing) reconnects on its own.
+const PAIRED_RETRY_SECS: u64 = 15;           // Consecutive failed HTTP requests before dropping connection and rescanning
 const HTTP_REQUEST_TIMEOUT_MS: u64 = 500;   
 
 // Global Delays & Timeouts
@@ -664,6 +668,7 @@ fn main() {
                 
                 let mut test_ticks = 0;
                 let mut wifi_failures = 0;
+                let mut wifi_retry_after: HashMap<String, Instant> = HashMap::new();
 
                 loop {
                     sys.refresh_cpu_usage(); 
@@ -782,8 +787,11 @@ fn main() {
 
                             wifi_candidates.clear();
                             let wifi_map = state.discovered_wifi.lock().unwrap();
+                            let now = Instant::now();
                             for ip in wifi_map.keys() { 
-                                wifi_candidates.push(ip.clone()); 
+                                if wifi_retry_after.get(ip).map_or(true, |t| now >= *t) {
+                                    wifi_candidates.push(ip.clone());
+                                }
                             }
 
                             candidate_idx = 0;
@@ -850,8 +858,11 @@ fn main() {
                                     candidate_idx = 0;
 
                                     wifi_candidates.clear();
+                                    let now = Instant::now();
                                     for ip in state.discovered_wifi.lock().unwrap().keys() { 
-                                        wifi_candidates.push(ip.clone()); 
+                                        if wifi_retry_after.get(ip).map_or(true, |t| now >= *t) {
+                                            wifi_candidates.push(ip.clone());
+                                        }
                                     }
 
                                     if !wifi_candidates.is_empty() {
@@ -880,8 +891,8 @@ fn main() {
                                     phase = AppPhase::ConnectedWifi;
                                 }
                                 Err(ureq::Error::Status(403, _)) => {
-                                    *state.status_msg.lock().unwrap() = "❌ Device already paired".to_string();
-                                    state.discovered_wifi.lock().unwrap().remove(ip);
+                                    *state.status_msg.lock().unwrap() = "❌ Device already paired, retrying...".to_string();
+                                    wifi_retry_after.insert(ip.clone(), Instant::now() + Duration::from_secs(PAIRED_RETRY_SECS));
                                     test_ticks = 99; 
                                 }
                                 Err(_) => { 
