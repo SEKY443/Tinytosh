@@ -84,6 +84,7 @@ private:
 
     void drawClaudeAlert(const ClaudeData& claude);
     static String formatClock(unsigned long seconds);
+    static String formatRate(float kbPerSec);
     void drawUsageRow(int y, const char* label, int percent, int resetMinutes);
     static String fitText(String text, int maxChars);
 };

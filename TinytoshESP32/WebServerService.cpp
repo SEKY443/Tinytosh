@@ -1264,6 +1264,7 @@ void WebServerService::handlePcStats() {
     state->pc.mem_percent = doc["mem_percent"] | 0.0;
     state->pc.disk_percent = doc["disk_percent"] | 0.0;
     state->pc.net_down_kb = doc["net_down_kb"] | 0.0;
+    state->pc.net_up_kb = doc["net_up_kb"] | 0.0;
     
     state->pc.last_update = millis();
     state->pc.is_wifi = true;

@@ -107,6 +107,7 @@ struct BridgeStats {
     pc_id: String,
     cpu_percent: f32,
     net_down_kb: u64, 
+    net_up_kb: u64,
     mem_percent: f64,
     disk_percent: u64,
     #[serde(flatten)]
@@ -681,6 +682,7 @@ fn main() {
 
                     let total_rx_bytes: u64 = networks.iter().map(|(_, n)| n.received()).sum();
                     let download_kb = total_rx_bytes / 1024; 
+                    let upload_kb = networks.iter().map(|(_, n)| n.transmitted()).sum::<u64>() / 1024;
 
                     let mut media_data = state.media_info.lock().unwrap().clone();
                     (media_data.media_pos, media_data.media_len) = if media_data.media_status == "stopped" {
@@ -697,6 +699,7 @@ fn main() {
                         pc_id: thread_pc_id.clone(),
                         cpu_percent: cpu, 
                         net_down_kb: download_kb, 
+                        net_up_kb: upload_kb,
                         mem_percent: ram, 
                         disk_percent: disk_usage,
                         media: media_data,

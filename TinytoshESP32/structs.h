@@ -276,6 +276,7 @@ struct PcStats {
   float net_down_kb;
   unsigned long last_update = 0;
   bool is_wifi = false;
+  float net_up_kb = 0;
 
   // CPU history ring buffer for the graph (percent, oldest overwritten first)
   uint8_t cpu_history[CPU_HISTORY_LEN] = {0};

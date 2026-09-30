@@ -437,7 +437,7 @@ bool JsonSerializer::parseConfig(const char* jsonString, AppState& state) {
     if (!config.show_daylight) { state.daylight.sunrise_mins = -1; state.daylight.sunset_mins = -1; state.daylight.noon_mins = -1; state.daylight.length_mins = -1; state.daylight.last_fetch_yday = -1; }
     if (!config.show_moon) { state.moon.rise_mins = -1; state.moon.set_mins = -1; state.moon.curphase = "N/A"; state.moon.fracillum = -1; state.moon.last_fetch_yday = -1; }
     if (!config.show_population) { state.population.world_pop_base = -1; state.population.country_pop_base = -1; state.population.last_fetch_yday = -1; }
-    if (!config.show_pc) { state.pc.cpu_percent = 0; state.pc.net_down_kb = 0; state.pc.mem_percent = 0; state.pc.disk_percent = 0; }
+    if (!config.show_pc) { state.pc.cpu_percent = 0; state.pc.net_down_kb = 0; state.pc.net_up_kb = 0; state.pc.mem_percent = 0; state.pc.disk_percent = 0; }
     
     // Array Wipes
     if (!config.show_crypto) { 

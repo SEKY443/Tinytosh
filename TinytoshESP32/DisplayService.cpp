@@ -1042,14 +1042,23 @@ void DisplayService::drawPcScreen(const PcStats& pcStats) {
         prevY = y;
     }
 
-    // 2. RAM and download bars, packed below the graph
-    String netValue;
-    if (pcStats.net_down_kb >= 1024) netValue = String((int)round(pcStats.net_down_kb / 1024.0)) + "M";
-    else if (pcStats.net_down_kb >= 100) netValue = "<1M";
-    else netValue = String((int)pcStats.net_down_kb) + "K";
-
+    // 2. RAM bar, then download / upload speeds as text
     drawRow(43, "RAM", pcStats.mem_percent, String((int)round(pcStats.mem_percent)) + "%");
-    drawRow(55, "NET", (pcStats.net_down_kb / 5120.0) * 100.0, netValue);
+
+    String down = "DN " + formatRate(pcStats.net_down_kb);
+    String up = "UP " + formatRate(pcStats.net_up_kb);
+    display.setCursor(0, 55);
+    display.print(down);
+    display.setCursor(128 - up.length() * 6, 55);
+    display.print(up);
+}
+
+// KB/s as a short label: "850K", "1.2M", "12M".
+String DisplayService::formatRate(float kbPerSec) {
+    if (isnan(kbPerSec) || kbPerSec < 0) kbPerSec = 0;
+    if (kbPerSec < 1024) return String((int)kbPerSec) + "K";
+    float mb = kbPerSec / 1024.0;
+    return mb < 10 ? String(mb, 1) + "M" : String((int)round(mb)) + "M";
 }
 
 void DisplayService::drawMediaScreen(const PcMedia& media) {
