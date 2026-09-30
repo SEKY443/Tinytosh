@@ -1340,14 +1340,14 @@ void DisplayService::drawBambuScreen(const BambuData& data) {
     display.print(timeStr);
 }
 
-void DisplayService::drawClaudeScreen(const ClaudeData& claude) {
+void DisplayService::drawClaudeScreen(const ClaudeData& claude, bool invertedDisplay) {
     if (!ClaudeService::hasData(claude)) {
         drawInfoScreen(nullptr, "No Claude");
         return;
     }
 
     if (ClaudeService::needsUser(claude)) {
-        drawClaudeAlert(claude);
+        drawClaudeAlert(invertedDisplay);
         return;
     }
 
@@ -1409,34 +1409,43 @@ void DisplayService::drawClaudeScreen(const ClaudeData& claude) {
 }
 
 // Full-screen call to action: Claude is blocked until the user answers.
-void DisplayService::drawClaudeAlert(const ClaudeData& claude) {
-    display.clearDisplay();
+// The whole screen flashes between white and black once per second so it reads from
+// across the room. `invertedDisplay` compensates for the hardware Invert Colors
+// setting, so the first phase is always a white background on the glass.
+void DisplayService::drawClaudeAlert(bool invertedDisplay) {
+    bool whitePhase = (millis() / 1000) % 2 == 0;
+    bool whiteInBuffer = whitePhase != invertedDisplay;
+    uint16_t bg = whiteInBuffer ? SSD1306_WHITE : SSD1306_BLACK;
+    uint16_t fg = whiteInBuffer ? SSD1306_BLACK : SSD1306_WHITE;
+
+    display.fillScreen(bg);
     display.setTextWrap(false);
     display.setFont();
 
-    // Big "!" on a solid panel so it reads from across the desk
-    display.fillRect(0, 0, 40, 64, SSD1306_WHITE);
-    display.fillRoundRect(15, 7, 10, 34, 3, SSD1306_BLACK);
-    display.fillRoundRect(15, 46, 10, 10, 3, SSD1306_BLACK);
+    // "!" and the two text lines are both centred on the screen's middle row;
+    // left margin, gap, and right margin are 20 px each.
+    const int MARGIN = 20;
+    const int GAP = 20;
+    const int BANG_W = 10;
+    const int BAR_H = 34, DOT_H = 10, BANG_GAP = 5;
+    const int bangTop = (64 - (BAR_H + BANG_GAP + DOT_H)) / 2;
+    display.fillRoundRect(MARGIN, bangTop, BANG_W, BAR_H, 3, fg);
+    display.fillRoundRect(MARGIN, bangTop + BAR_H + BANG_GAP, BANG_W, DOT_H, 3, fg);
 
-    display.setTextColor(SSD1306_WHITE);
+    // Size 2 glyphs are 14 px tall on a 16 px cell; two lines 20 px apart span 34 px.
+    const int LINE_STEP = 20;
+    const int GLYPH_H = 14;
+    const int textTop = (64 - (LINE_STEP + GLYPH_H)) / 2;
+    const int textX = MARGIN + BANG_W + GAP;
+    display.setTextColor(fg);
     display.setTextSize(2);
-    display.setCursor(48, 4);
+    display.setCursor(textX, textTop);
     display.print("NEEDS");
-    display.setCursor(48, 22);
+    display.setCursor(textX, textTop + LINE_STEP);
     display.print("YOU");
 
-    String action = "PERMISSION";
-    if (claude.tool == "AskUserQuestion")   action = "QUESTION";
-    else if (claude.tool == "ExitPlanMode") action = "PLAN REVIEW";
-    else if (claude.tool.length() > 0)      action = "ALLOW " + claude.tool;
-    action.toUpperCase();
-
     display.setTextSize(1);
-    display.setCursor(48, 43);
-    display.print(fitText(action, 13));
-    display.setCursor(48, 54);
-    display.print(fitText(claude.project, 13));
+    display.setTextColor(SSD1306_WHITE);
 }
 
 void DisplayService::drawUsageRow(int y, const char* label, int percent, int resetMinutes) {
@@ -1566,7 +1575,7 @@ void DisplayService::drawScreen(int screenIndex, const AppState& state, int subI
     case SCREEN_PC_MONITOR: drawPcScreen(state.pc); break;
     case SCREEN_PC_MEDIA: drawMediaScreen(state.media); break;
     case SCREEN_BAMBU: drawBambuScreen(state.bambu); break;
-    case SCREEN_CLAUDE: drawClaudeScreen(state.claude); break;
+    case SCREEN_CLAUDE: drawClaudeScreen(state.claude, state.config.invert_display); break;
   }
 }
 

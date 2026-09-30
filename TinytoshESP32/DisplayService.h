@@ -27,7 +27,7 @@ public:
     void drawPcScreen(const PcStats& pcStats);
     void drawMediaScreen(const PcMedia& media);
     void drawBambuScreen(const BambuData& bambu);
-    void drawClaudeScreen(const ClaudeData& claude);
+    void drawClaudeScreen(const ClaudeData& claude, bool invertedDisplay = false);
     void drawInfoScreen(const unsigned char* image = nullptr, String text = "No Data");
 
     void drawScreen(int screenIndex, const AppState& state, int subIndex = 0);
@@ -82,7 +82,7 @@ private:
     const unsigned char* getWeatherBitmap(int wmo_code, bool is_day);
     const unsigned char* getAQIBitmap(int val, bool is_eu);
 
-    void drawClaudeAlert(const ClaudeData& claude);
+    void drawClaudeAlert(bool invertedDisplay);
     static String formatClock(unsigned long seconds);
     static String formatRate(float kbPerSec);
     void drawUsageRow(int y, const char* label, int percent, int resetMinutes);
