@@ -239,14 +239,24 @@ void loop() {
     updateAllData();
   }
 
-  // Claude Code: bring its screen forward the moment Claude is blocked on the user
+  // Claude Code: bring its screen forward the moment Claude is blocked on the user.
+  // This overrides Night Mode: the alert wakes the display at normal brightness.
   static bool claudeWasWaiting = false;
+  static bool claudeAlertDuringNight = false;
   bool claudeWaiting = appState.config.claude_alert
                        && ClaudeService::needsUser(appState.claude)
                        && displayService.isScreenEnabled(appState, SCREEN_CLAUDE);
-  if (claudeWaiting && !claudeWasWaiting && !nightModeService.isLatched()) {
+  if (claudeWaiting && !claudeWasWaiting) {
     displayService.jumpToScreen(appState, SCREEN_CLAUDE);
     lastScreenSwitch = millis();
+  }
+  if (claudeWaiting && nightModeService.isLatched()) {
+    claudeAlertDuringNight = true;
+  }
+  if (!claudeWaiting && claudeWasWaiting && claudeAlertDuringNight) {
+    // Answered at night: go back to the primary screen instead of staying on Claude all night.
+    claudeAlertDuringNight = false;
+    if (nightModeService.isLatched()) displayService.jumpToFirstEnabledScreen(appState);
   }
   claudeWasWaiting = claudeWaiting;
 
@@ -280,7 +290,7 @@ void loop() {
   static bool screenClearedForNight = false;
 
   bool isTemporarilyAwake = nightModeService.isTemporarilyAwake(activeAction);
-  bool shouldDrawScreen = !nightModeService.isScreenOffAction(activeAction) || isTemporarilyAwake;
+  bool shouldDrawScreen = !nightModeService.isScreenOffAction(activeAction) || isTemporarilyAwake || claudeWaiting;
 
   if (!shouldDrawScreen) {
     if (!screenClearedForNight) {
@@ -296,12 +306,16 @@ void loop() {
       Serial.println("💡 Night Mode: Display turned back ON.");
     }
 
-    unsigned long refreshInterval = nightModeService.getRefreshIntervalMs(activeAction);
+    // Night Mode redraws only every 10-60 s; a pending alert keeps the normal 1 s pace.
+    const unsigned long ALERT_REFRESH_MS = 1000;
+    unsigned long refreshInterval = claudeWaiting ? ALERT_REFRESH_MS : nightModeService.getRefreshIntervalMs(activeAction);
 
     if (nightModeService.isRedrawDue(refreshInterval)) {
       displayService.setBrightness(effectiveBrightness());
       displayService.setInverted(appState.config.invert_display);
-      if (nightModeService.isLatched()) {
+      if (claudeWaiting) {
+        displayService.setContrast(false);  // Normal brightness, even at night
+      } else if (nightModeService.isLatched()) {
         if (activeAction == 1 || isTemporarilyAwake) {
           displayService.setContrast(true);
         } else if (activeAction == 0) {
